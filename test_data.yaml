@@ -1,6 +1,11 @@
-train: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\TRAIN
-val: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\VAL
-test: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\TEST
+train: /home/avishka/kumal/repo/drones/FYPML/dataset-Br35H/TRAIN
+val: /home/avishka/kumal/repo/drones/FYPML/dataset-Br35H/VAL
+test: /home/avishka/kumal/repo/drones/FYPML/dataset-Br35H/TEST
+
+
+# train: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\TRAIN
+# val: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\VAL
+# test: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\TEST
 
 nc: 1
 names: ['Brain tumor']
