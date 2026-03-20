@@ -46,9 +46,9 @@ logger = setup_logger()
 
 # ============== CONFIG ==============
 CONFIG = {
-    'train_dir': './dataset/train',
-    'val_dir': './dataset/val',
-    'test_dir': './dataset/test',
+    'train_dir': 'dataset-Br35H/TRAIN',
+    'val_dir': 'dataset-Br35H/VAL',
+    'test_dir': 'dataset-Br35H/TEST',
     'batch_size': 32,
     'num_epochs': 10,
     'learning_rate': 0.001,
@@ -57,31 +57,55 @@ CONFIG = {
 }
 # ====================================
 
-
 class CustomImageDataset(Dataset):
-    """Custom Dataset for loading images from folder structure"""
+    """Custom Dataset for loading images and labels from YOLO format folder structure"""
     
     def __init__(self, root_dir, transform=None):
         """
         Args:
-            root_dir: Path to dataset folder (train/val/test)
+            root_dir: Path to dataset folder (e.g., containing both .jpg and .txt files)
             transform: Transforms to apply to images
         """
         self.root_dir = root_dir
         self.transform = transform
         self.images = []
         self.labels = []
-        self.classes = sorted([d for d in os.listdir(root_dir) 
-                              if os.path.isdir(os.path.join(root_dir, d))])
         
-        # Load all image paths and labels
-        for class_idx, class_name in enumerate(self.classes):
-            class_path = os.path.join(root_dir, class_name)
-            for img_name in os.listdir(class_path):
-                if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    self.images.append(os.path.join(class_path, img_name))
-                    self.labels.append(class_idx)
-    
+        valid_extensions = ('.jpg', '.jpeg', '.png')
+        
+        # Iterate through all files in the directory
+        for file_name in os.listdir(root_dir):
+            if file_name.lower().endswith(valid_extensions):
+                img_path = os.path.join(root_dir, file_name)
+                
+                # Construct corresponding .txt file path
+                txt_name = os.path.splitext(file_name)[0] + '.txt'
+                txt_path = os.path.join(root_dir, txt_name)
+                
+                # Default label is 0 ("no label" case)
+                binary_label = 0 
+                
+                # Parse the text file if it exists
+                if os.path.exists(txt_path):
+                    with open(txt_path, 'r') as f:
+                        lines = f.readlines()
+                        if lines:
+                            # Read only the top (first) line
+                            first_line = lines[0].strip()
+                            if first_line:
+                                # YOLO format: class_id x_center y_center width height
+                                # We only need the class_id (the first item)
+                                class_id = first_line.split()[0]
+                                
+                                # Rule: class '0' -> 0, other classes -> 1
+                                if class_id == '0':
+                                    binary_label = 0
+                                else:
+                                    binary_label = 1
+                
+                self.images.append(img_path)
+                self.labels.append(binary_label)
+
     def __len__(self):
         return len(self.images)
     
@@ -94,8 +118,6 @@ class CustomImageDataset(Dataset):
             image = self.transform(image)
         
         return image, label
-
-
 def get_transforms():
     """Get image transforms for training and validation"""
     transform = transforms.Compose([
@@ -117,7 +139,7 @@ def load_datasets(train_dir, val_dir, test_dir, transform):
     
     if train_dataset:
         logger.info(f"Train samples: {len(train_dataset)}")
-        logger.info(f"Classes: {train_dataset.classes}")
+        
     
     if val_dataset:
         logger.info(f"Val samples: {len(val_dataset)}")
@@ -164,7 +186,7 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
     
     for images, labels in train_loader:
         images = images.to(device)
-        labels = labels.to(device)
+        labels = labels.to(device, dtype=torch.long)
         
         # Forward pass
         outputs = model(images)
@@ -196,7 +218,7 @@ def validate(model, val_loader, criterion, device):
     with torch.no_grad():
         for images, labels in val_loader:
             images = images.to(device)
-            labels = labels.to(device)
+            labels = labels.to(device, dtype=torch.long)
             
             outputs = model(images)
             loss = criterion(outputs, labels)
