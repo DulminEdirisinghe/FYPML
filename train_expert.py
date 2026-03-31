@@ -12,8 +12,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 def save_experts(model, expert1_path):
     """Extract and save cv3 weights as two experts."""
     detect_layer = model.model.model[-1]  # Get the Detect head
-    expert1 = copy.deepcopy(detect_layer.cv3)  # Expert 1 (original cv3), detect_layer = YOLO Detect head (P3, P4, P5)
-    #expert2 = copy.deepcopy(detect_layer.cv3)  # Expert 2 (duplicate for MoE)
+    expert1 = copy.deepcopy(detect_layer.experts1)  # Expert 1 (original cv3), detect_layer = YOLO Detect head (P3, P4, P5)
+    #expert2 = copy.deepcopy(detect_layer.experts2)  # Expert 2 (duplicate for MoE)
     
     # Save state dicts ,Saves only the parameters ,Not the full model
     torch.save(expert1.state_dict(), expert1_path)

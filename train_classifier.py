@@ -5,7 +5,7 @@ Simple training pipeline for EfficientNet on custom image dataset with 2 classes
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import transforms, models
 import os
 from PIL import Image
@@ -47,7 +47,6 @@ logger = setup_logger()
 # ============== CONFIG ==============
 CONFIG = {
     'train_dir': 'dataset-Br35H/TRAIN',
-    'val_dir': 'dataset-Br35H/VAL',
     'test_dir': 'dataset-Br35H/TEST',
     'batch_size': 32,
     'num_epochs': 10,
@@ -71,37 +70,22 @@ class CustomImageDataset(Dataset):
         self.images = []
         self.labels = []
         
-        valid_extensions = ('.jpg', '.jpeg', '.png')
+        valid_extensions = ('.png', '.jpg', '.jpeg')
         
         # Iterate through all files in the directory
         for file_name in os.listdir(root_dir):
             if file_name.lower().endswith(valid_extensions):
                 img_path = os.path.join(root_dir, file_name)
                 
-                # Construct corresponding .txt file path
-                txt_name = os.path.splitext(file_name)[0] + '.txt'
-                txt_path = os.path.join(root_dir, txt_name)
+                # Split the filename without extension by '_'
+                name_without_ext = os.path.splitext(file_name)[0]
+                parts = name_without_ext.split('_')
                 
-                # Default label is 0 ("no label" case)
-                binary_label = 0 
-                
-                # Parse the text file if it exists
-                if os.path.exists(txt_path):
-                    with open(txt_path, 'r') as f:
-                        lines = f.readlines()
-                        if lines:
-                            # Read only the top (first) line
-                            first_line = lines[0].strip()
-                            if first_line:
-                                # YOLO format: class_id x_center y_center width height
-                                # We only need the class_id (the first item)
-                                class_id = first_line.split()[0]
-                                
-                                # Rule: class '0' -> 0, other classes -> 1
-                                if class_id == '0':
-                                    binary_label = 0
-                                else:
-                                    binary_label = 1
+                # Assign label 0 if 'NO' is in the filename parts (e.g., NO_DRONE), else 1
+                if 'NO' in parts:
+                    binary_label = 0
+                else:
+                    binary_label = 1
                 
                 self.images.append(img_path)
                 self.labels.append(binary_label)
@@ -129,23 +113,56 @@ def get_transforms():
     return transform
 
 
-def load_datasets(train_dir, val_dir, test_dir, transform):
-    """Load train, validation, and test datasets"""
+def _is_valid_path(path):
+    """Return True if a path value is provided and not the string 'none'."""
+    return path is not None and str(path).strip().lower() != 'none'
+
+
+def load_datasets(train_dir, test_dir, transform):
+    """Load datasets.
+
+    If TEST is provided, it is used for both validation and testing.
+    If TEST is not provided, TRAIN is split 70/30 into train/validation.
+    """
     logger.info("Loading datasets...")
-    
-    train_dataset = CustomImageDataset(train_dir, transform=transform) if os.path.exists(train_dir) else None
-    val_dataset = CustomImageDataset(val_dir, transform=transform) if os.path.exists(val_dir) else None
-    test_dataset = CustomImageDataset(test_dir, transform=transform) if os.path.exists(test_dir) else None
-    
-    if train_dataset:
-        logger.info(f"Train samples: {len(train_dataset)}")
-        
-    
-    if val_dataset:
-        logger.info(f"Val samples: {len(val_dataset)}")
-    
+
+    if not train_dir or not os.path.exists(train_dir):
+        logger.error(f"Train directory not found: {train_dir}")
+        return None, None, None
+
+    full_train_dataset = CustomImageDataset(train_dir, transform=transform)
+    train_dataset = full_train_dataset
+    val_dataset = None
+    test_dataset = None
+
+    if _is_valid_path(test_dir) and os.path.exists(test_dir):
+        test_dataset = CustomImageDataset(test_dir, transform=transform)
+        val_dataset = test_dataset
+        logger.info("Using TEST dataset as validation dataset.")
+    else:
+        total_train = len(full_train_dataset)
+        train_size = int(total_train * 0.7)
+        val_size = total_train - train_size
+
+        if train_size == 0 or val_size == 0:
+            logger.error("Not enough TRAIN samples to create a 70/30 split.")
+            return None, None, None
+
+        split_generator = torch.Generator().manual_seed(42)
+        train_dataset, val_dataset = random_split(
+            full_train_dataset,
+            [train_size, val_size],
+            generator=split_generator,
+        )
+        logger.info("TEST path not provided. Using 70/30 split from TRAIN for train/validation.")
+
+    logger.info(f"Train samples: {len(train_dataset)}")
+    logger.info(f"Val samples: {len(val_dataset)}")
+
     if test_dataset:
         logger.info(f"Test samples: {len(test_dataset)}")
+    else:
+        logger.info("Test samples: 0 (no TEST dataset provided)")
     
     return train_dataset, val_dataset, test_dataset
 
@@ -276,7 +293,7 @@ def main(config):
     
     # Load datasets
     train_dataset, val_dataset, test_dataset = load_datasets(
-        config['train_dir'], config['val_dir'], config['test_dir'], transform
+        config['train_dir'], config.get('test_dir'), transform
     )
     
     # Create data loaders
