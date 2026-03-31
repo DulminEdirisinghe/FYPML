@@ -1,11 +1,11 @@
-train: /home/avishka/kumal/repo/drones/FYPML/dataset-Br35H/TRAIN
-val: /home/avishka/kumal/repo/drones/FYPML/dataset-Br35H/VAL
-test: /home/avishka/kumal/repo/drones/FYPML/dataset-Br35H/TEST
+train: /home/dulmin/FYPML/data/final_fixed/stationary/images/train
+val: /home/dulmin/FYPML/data/final_fixed/stationary/images/val
+test: /home/dulmin/FYPML/data/final_fixed/stationary/images/test
 
 
 # train: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\TRAIN
 # val: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\VAL
 # test: D:\Yolo Machine Learning\Drone_swarm_detection\dataset-Br35H\TEST
 
-nc: 1
-names: ['Brain tumor']
+nc: 3
+names: ['phantom', 'mavic', 'vimana']
