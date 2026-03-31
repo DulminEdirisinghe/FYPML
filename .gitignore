@@ -175,4 +175,4 @@ pnnx*
 calibration_*.npy
 
 #data
-scalogram/
+data/
