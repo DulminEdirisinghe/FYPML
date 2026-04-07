@@ -46,8 +46,8 @@ logger = setup_logger()
 
 # ============== CONFIG ==============
 CONFIG = {
-    'train_dir': 'dataset-Br35H/TRAIN',
-    'test_dir': 'dataset-Br35H/TEST',
+    'train_dir': 'data/SCD_Images_224',
+    'test_dir': None,
     'batch_size': 32,
     'num_epochs': 10,
     'learning_rate': 0.001,

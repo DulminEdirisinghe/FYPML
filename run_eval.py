@@ -2,7 +2,7 @@ from ultralytics import YOLO
 import torch
 
 # load the model architecture
-model = YOLO('/home/sadeepa/FYP_Group_10/Amana/ultralytics/ultralytics/cfg/models/11/yolo11.yaml')
+model = YOLO('ultralytics/cfg/models/11/yolo11.yaml')
 
 # load trained weights
 state_dict = torch.load('phase1_cv3_model.pt')
@@ -10,7 +10,7 @@ model.model.load_state_dict(state_dict)
 
 # evaluate
 #results = model.predict(data='coco8.yaml', imgsz=640, device='cuda')
-results = model.val(data='coco8.yaml', imgsz=640, device='cuda')
+results = model.val(data='test_data.yaml', imgsz=640, device='cuda')
 
 
 # Check MoE statistics
