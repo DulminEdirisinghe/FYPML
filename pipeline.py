@@ -51,7 +51,7 @@ CONFIG = {
     'class_names': ['no_drone', 'drone'],
 
     'T1': 0.5,
-    'T2': 0.5,
+    'T2': 0.3,
 
     'fusion_w1': 1.0,
     'fusion_w2': 1.0,
@@ -207,7 +207,6 @@ def detect(image_path_a, image_path_b, classifier, yolo_model, transform, device
             'status_message': f"Drone detected: {yolo_result['best_class_name']}"  # 🔥 NEW
         }
 
-    print(f"yolo probability (F): {F:.4f}, classifier probability (P4): {P4:.4f}, fusion score (G): {G:.4f}")
     return {
         **base_result,
         'final_decision': 'Detected',
