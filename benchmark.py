@@ -1,4 +1,7 @@
 import os
+import glob
+import re
+import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
@@ -41,8 +44,9 @@ def save_pair_plot(res, idx, save_dir):
     # 2. Setup the plot
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     
-    # Title with GT, Pred, and Scores
-    title = (f"Status: {category.upper()}\n"
+    # Title with GT, Pred, Scores, and Distance
+    dist_str = f"{res['distance']}m" if res.get('distance') is not None else "Unknown Dist"
+    title = (f"Status: {category.upper()} | Range: {dist_str}\n"
              f"GT: {gt_class} | Pred: {pred_class} | Fusion (G): {res['G']:.3f}")
     fig.suptitle(title, fontsize=14, fontweight='bold', color=color)
 
@@ -69,11 +73,12 @@ def save_pair_plot(res, idx, save_dir):
 
     plt.tight_layout()
     
-    # 3. Save the figure
-    filename = f"{category}_{idx:04d}.png"
+    # 3. Save the figure (added distance to filename for easier sorting)
+    dist_prefix = f"{res['distance']}m_" if res.get('distance') is not None else ""
+    filename = f"{category}_{dist_prefix}{idx:04d}.png"
     filepath = os.path.join(save_dir, filename)
     plt.savefig(filepath)
-    plt.close(fig)  # Important to prevent memory leaks when saving hundreds of plots!
+    plt.close(fig)  # Important to prevent memory leaks!
 
 
 # ============== BENCHMARK LOOP ==============
@@ -89,14 +94,16 @@ def run_benchmark():
         print("No pairs matched. Please check your folder paths and naming conventions.")
         return
 
-    # Tracking lists for metrics
+    # Tracking lists for overall metrics
     y_true_binary = []
     y_pred_binary = []
-    
     y_true_class = []
     y_pred_class = []
     
     detailed_results = []
+    
+    # Tracking dictionary for RANGE-WISE metrics
+    range_metrics = {}
 
     print("\nStarting Evaluation...")
     
@@ -116,8 +123,9 @@ def run_benchmark():
         # 2. Extract Ground Truths
         gt_is_drone = data['gt_has_drone']
         gt_class = data['gt_drone_class'] if gt_is_drone else 'no_drone'
+        dist = data.get('distance', 'Unknown')
         
-        # 3. Extract Predictions based on your fusion rules
+        # 3. Extract Predictions
         pred_is_drone = result['final_decision'] in ['Detected', 'DroneType']
         
         if result['final_decision'] == 'DroneType':
@@ -127,13 +135,32 @@ def run_benchmark():
         else:
             pred_class = 'no_drone'
             
-        # 4. Append to metric lists
+        # 4. Append to overall metric lists
         y_true_binary.append(gt_is_drone)
         y_pred_binary.append(pred_is_drone)
-        
         y_true_class.append(gt_class)
         y_pred_class.append(pred_class)
         
+        # 5. Track Range-wise Metrics
+        if dist not in range_metrics:
+            range_metrics[dist] = {
+                'total': 0, 'bin_correct': 0, 'cls_correct': 0, 
+                'cls_total': 0, 'sum_F': 0.0, 'sum_G': 0.0
+            }
+            
+        range_metrics[dist]['total'] += 1
+        range_metrics[dist]['sum_F'] += result['F']
+        range_metrics[dist]['sum_G'] += result['G']
+        
+        if gt_is_drone == pred_is_drone:
+            range_metrics[dist]['bin_correct'] += 1
+            
+        if gt_is_drone:
+            range_metrics[dist]['cls_total'] += 1
+            if gt_class == pred_class:
+                range_metrics[dist]['cls_correct'] += 1
+        
+        # 6. Save detailed results for plotting
         detailed_results.append({
             'a_img_path': data['a_img_path'],
             'b_img_path': data['b_img_path'],
@@ -144,16 +171,16 @@ def run_benchmark():
             'pred_class': pred_class,
             'G': result['G'],
             'F': result['F'],
-            'P4': result['P4']
+            'P4': result['P4'],
+            'distance': dist
         })
         
-        # Optional: Print progress every 10 images
         if (i + 1) % 10 == 0:
             print(f"Processed {i + 1}/{len(dataset)} pairs...")
 
-    # ============== CALCULATE METRICS ==============
+    # ============== CALCULATE OVERALL METRICS ==============
     print("\n" + "="*50)
-    print("🎯 BENCHMARK RESULTS")
+    print("🎯 OVERALL BENCHMARK RESULTS")
     print("="*50)
     
     bin_acc = accuracy_score(y_true_binary, y_pred_binary)
@@ -167,22 +194,40 @@ def run_benchmark():
         
         class_acc = accuracy_score(y_true_drones_only, y_pred_drones_only)
         print(f"\n2. Class Certainty Accuracy (When GT is Drone): {class_acc * 100:.2f}%")
-        
-        print("\nDetailed Class Report (On Actual Drones):")
-        print(classification_report(y_true_drones_only, y_pred_drones_only, zero_division=0))
     else:
-        print("\n2. Class Certainty Accuracy: N/A (No ground truth drones found in dataset)")
+        print("\n2. Class Certainty Accuracy: N/A")
+
+    # ============== CALCULATE RANGE-WISE METRICS ==============
+    print("\n" + "="*60)
+    print("📊 RANGE-WISE PERFORMANCE")
+    print("="*60)
+    print(f"{'Dist(m)':<8} | {'Pairs':<6} | {'Bin Acc':<8} | {'Cls Acc':<8} | {'Avg F':<6} | {'Avg G':<6}")
+    print("-" * 60)
+    
+    # Sort numeric distances first, then any "Unknown" strings at the end
+    sorted_dists = sorted([d for d in range_metrics.keys() if isinstance(d, (int, float))])
+    sorted_dists += [d for d in range_metrics.keys() if not isinstance(d, (int, float))]
+
+    for dist in sorted_dists:
+        rm = range_metrics[dist]
+        bin_acc = (rm['bin_correct'] / rm['total']) * 100
+        cls_acc_str = "N/A"
+        if rm['cls_total'] > 0:
+            cls_acc = (rm['cls_correct'] / rm['cls_total']) * 100
+            cls_acc_str = f"{cls_acc:6.2f}%"
+            
+        avg_F = rm['sum_F'] / rm['total']
+        avg_G = rm['sum_G'] / rm['total']
+        
+        dist_label = f"{dist}" if isinstance(dist, str) else f"{dist:.1f}"
+        print(f"{dist_label:<8} | {rm['total']:<6} | {bin_acc:6.2f}% | {cls_acc_str:<8} | {avg_F:5.3f} | {avg_G:5.3f}")
 
     # ============== GENERATE ALL PLOTS ==============
     print(f"\nGenerating plots for all {len(detailed_results)} pairs...")
-    
-    # Create the output directory if it doesn't exist
     os.makedirs(PLOT_SAVE_DIR, exist_ok=True)
     
     for idx, res in enumerate(detailed_results):
         save_pair_plot(res, idx, PLOT_SAVE_DIR)
-        
-        # Give progress update every 50 plots
         if (idx + 1) % 50 == 0:
             print(f"Saved {idx + 1}/{len(detailed_results)} plots...")
 
