@@ -1,21 +1,79 @@
 import os
-import glob
-import re
-import torch
+import matplotlib.pyplot as plt
+from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import accuracy_score, classification_report
 from src.bench_dataset import DronePairDataset
 
 # Import your existing functions from your main detector file
-# Assuming your previous code is saved as `detector_backend.py`
 from pipeline import load_all_models, detect, CONFIG
 
 # ============== CONFIGURATIONS ==============
 FOLDER_A_TEST = 'data/data/SCD_Images/test'
 FOLDER_B_TEST = 'data/data/YOLO_data/stationary/test'
 
+PLOT_SAVE_DIR = 'runs/benchmark_plots'  # Folder where all pair plots will be saved
 
 
+# ============== PLOTTING UTILITY ==============
+def save_pair_plot(res, idx, save_dir):
+    """Plots a single pair side-by-side and saves it based on accuracy category."""
+    
+    # 1. Determine the accuracy category
+    gt_is_drone = res['gt_is_drone']
+    pred_is_drone = res['pred_is_drone']
+    gt_class = res['gt_class']
+    pred_class = res['pred_class']
+
+    if gt_is_drone != pred_is_drone:
+        category = "detection_error"
+        color = "red"
+    elif pred_class == 'uncertain':
+        category = "class_uncertainty"
+        color = "orange"
+    elif gt_class != pred_class:
+        category = "class_error"
+        color = "red"
+    else:
+        category = "all_correct"
+        color = "green"
+
+    # 2. Setup the plot
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Title with GT, Pred, and Scores
+    title = (f"Status: {category.upper()}\n"
+             f"GT: {gt_class} | Pred: {pred_class} | Fusion (G): {res['G']:.3f}")
+    fig.suptitle(title, fontsize=14, fontweight='bold', color=color)
+
+    # Load images
+    img_a = Image.open(res['a_img_path']).convert('RGB')
+    
+    # Use bounding box image if available, else original B
+    img_b_path = res.get('saved_detection_image', res['b_img_path'])
+    img_b = Image.open(img_b_path).convert('RGB')
+
+    # Display paths (keeping just the filename to prevent the text from overlapping)
+    path_a_text = os.path.basename(res['a_img_path'])
+    path_b_text = os.path.basename(res['b_img_path'])
+
+    # Plot A (EfficientNet)
+    axes[0].imshow(img_a)
+    axes[0].axis('off')
+    axes[0].set_title(f"A: EfficientNet (P4: {res['P4']:.3f})\nFile: {path_a_text}", fontsize=11)
+
+    # Plot B (YOLO)
+    axes[1].imshow(img_b)
+    axes[1].axis('off')
+    axes[1].set_title(f"B: YOLO (F: {res['F']:.3f})\nFile: {path_b_text}", fontsize=11)
+
+    plt.tight_layout()
+    
+    # 3. Save the figure
+    filename = f"{category}_{idx:04d}.png"
+    filepath = os.path.join(save_dir, filename)
+    plt.savefig(filepath)
+    plt.close(fig)  # Important to prevent memory leaks when saving hundreds of plots!
 
 
 # ============== BENCHMARK LOOP ==============
@@ -37,6 +95,8 @@ def run_benchmark():
     
     y_true_class = []
     y_pred_class = []
+    
+    detailed_results = []
 
     print("\nStarting Evaluation...")
     
@@ -67,12 +127,25 @@ def run_benchmark():
         else:
             pred_class = 'no_drone'
             
-        # 4. Append to lists
+        # 4. Append to metric lists
         y_true_binary.append(gt_is_drone)
         y_pred_binary.append(pred_is_drone)
         
         y_true_class.append(gt_class)
         y_pred_class.append(pred_class)
+        
+        detailed_results.append({
+            'a_img_path': data['a_img_path'],
+            'b_img_path': data['b_img_path'],
+            'saved_detection_image': result.get('saved_detection_image', data['b_img_path']),
+            'gt_is_drone': gt_is_drone,
+            'pred_is_drone': pred_is_drone,
+            'gt_class': gt_class,
+            'pred_class': pred_class,
+            'G': result['G'],
+            'F': result['F'],
+            'P4': result['P4']
+        })
         
         # Optional: Print progress every 10 images
         if (i + 1) % 10 == 0:
@@ -83,12 +156,9 @@ def run_benchmark():
     print("🎯 BENCHMARK RESULTS")
     print("="*50)
     
-    # 1. Binary Accuracy (Drone vs No Drone)
     bin_acc = accuracy_score(y_true_binary, y_pred_binary)
     print(f"\n1. Drone / No Drone Detection Accuracy: {bin_acc * 100:.2f}%")
     
-    # 2. Classification Accuracy / Certainty
-    # We evaluate this only on the images where a drone was ACTUALLY present
     true_drones_indices = [i for i, x in enumerate(y_true_binary) if x == True]
     
     if len(true_drones_indices) > 0:
@@ -102,6 +172,22 @@ def run_benchmark():
         print(classification_report(y_true_drones_only, y_pred_drones_only, zero_division=0))
     else:
         print("\n2. Class Certainty Accuracy: N/A (No ground truth drones found in dataset)")
+
+    # ============== GENERATE ALL PLOTS ==============
+    print(f"\nGenerating plots for all {len(detailed_results)} pairs...")
+    
+    # Create the output directory if it doesn't exist
+    os.makedirs(PLOT_SAVE_DIR, exist_ok=True)
+    
+    for idx, res in enumerate(detailed_results):
+        save_pair_plot(res, idx, PLOT_SAVE_DIR)
+        
+        # Give progress update every 50 plots
+        if (idx + 1) % 50 == 0:
+            print(f"Saved {idx + 1}/{len(detailed_results)} plots...")
+
+    print(f"\n✅ All plots saved successfully in the '{PLOT_SAVE_DIR}' directory.")
+
 
 if __name__ == "__main__":
     run_benchmark()
