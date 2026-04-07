@@ -4,10 +4,13 @@ import random
 import shutil
 from datetime import datetime
 
+# Import your matching dataset class
+from src.bench_dataset import DronePairDataset
+
 # ============== CONFIG ==============
 # Folders containing your actual images (update these to your real paths)
-SOURCE_FOLDER_A = 'data/SCD_Images_224'
-SOURCE_FOLDER_B = 'data/YOLO_data/split/moving/val/images'
+SOURCE_FOLDER_A = 'data/data/SCD_Images/test'
+SOURCE_FOLDER_B = 'data/data/YOLO_data/stationary/test'
 
 # The folders the detector script is actively watching
 STREAM_FOLDER_A = 'runs/folder_a'
@@ -41,26 +44,25 @@ def main():
     ensure_dir(STREAM_FOLDER_A)
     ensure_dir(STREAM_FOLDER_B)
 
-    # Get a list of all images in the source folders
-    src_images_a = [f for f in os.listdir(SOURCE_FOLDER_A) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    src_images_b = [f for f in os.listdir(SOURCE_FOLDER_B) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    print("Building Dataset to find matching pairs...")
+    # Initialize your dataset to correctly pair Folder A and Folder B images
+    dataset = DronePairDataset(SOURCE_FOLDER_A, SOURCE_FOLDER_B)
 
-    if not src_images_a or not src_images_b:
-        print("Error: Source folders are empty or don't exist. Please check your source paths.")
+    if len(dataset) == 0:
+        print("Error: No matched pairs found in the dataset. Please check your source paths.")
         return
 
-    print(f"Found {len(src_images_a)} images in Source A.")
-    print(f"Found {len(src_images_b)} images in Source B.")
+    print(f"Found {len(dataset)} perfectly matched image pairs.")
     print(f"Simulating stream at 1 frame every {STREAM_DELAY} seconds...\n")
 
     try:
         while True:
-            # 1. Pick random images
-            random_img_a = random.choice(src_images_a)
-            random_img_b = random.choice(src_images_b)
+            # 1. Pick a random, MATCHED pair from the dataset
+            random_idx = random.randint(0, len(dataset) - 1)
+            data = dataset[random_idx]
 
-            src_path_a = os.path.join(SOURCE_FOLDER_A, random_img_a)
-            src_path_b = os.path.join(SOURCE_FOLDER_B, random_img_b)
+            src_path_a = data['a_img_path']
+            src_path_b = data['b_img_path']
 
             # 2. Create a unified filename based on the current time
             timestamp = int(time.time() * 1000)
@@ -73,7 +75,9 @@ def main():
             shutil.copy(src_path_a, dest_path_a)
             shutil.copy(src_path_b, dest_path_b)
 
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Streamed pair: {common_filename}")
+            # Output what was just sent to the stream
+            original_a_name = os.path.basename(src_path_a)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Streamed pair: {common_filename} (Original: {original_a_name})")
 
             # 4. Clean up old files to avoid clutter
             cleanup_old_files(STREAM_FOLDER_A)
