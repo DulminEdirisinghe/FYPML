@@ -69,7 +69,6 @@ CONFIG = {
     'stream_folder_a': 'runs/folder_a',  # EfficientNet folder
     'stream_folder_b': 'runs/folder_b',  # YOLO folder
     'poll_interval': 5  # Seconds to wait between checking for new images
-
 }
 
 
@@ -168,7 +167,6 @@ def run_yolo(image_path, yolo_model):
 
 
 def detect(image_path_a, image_path_b, classifier, yolo_model, transform, device):
-
     image = read_image(image_path_a)
     image_tensor = transform(image).unsqueeze(0).to(device)
 
@@ -230,6 +228,7 @@ def get_latest_file(folder_path):
     # Return the file with the most recent creation/modification time
     return max(list_of_files, key=os.path.getctime)
 
+
 def main():
     logger.info("Loading models...")
     classifier, yolo_model, transform, device = load_all_models()
@@ -239,31 +238,30 @@ def main():
     os.makedirs(CONFIG['stream_folder_a'], exist_ok=True)
     os.makedirs(CONFIG['stream_folder_b'], exist_ok=True)
 
-    last_processed_image_a = None
+    # 🔥 CHANGED: Tracking the last processed file from Folder B instead
+    last_processed_image_b = None
 
     try:
         while True:
-            # 1. Look at Folder A for the newest image
-            latest_image_a = get_latest_file(CONFIG['stream_folder_a'])
+            # 1. Look at Folder B for the newest image (🔥 CHANGED)
+            latest_image_b = get_latest_file(CONFIG['stream_folder_b'])
 
-            # 2. If we found a new image that we haven't processed yet
-            if latest_image_a and latest_image_a != last_processed_image_a:
+            # 2. If we found a new image that we haven't processed yet (🔥 CHANGED)
+            if latest_image_b and latest_image_b != last_processed_image_b:
                 
                 # Tiny sleep to ensure the file isn't still being written by your camera stream
                 time.sleep(0.1) 
                 
-                # 3. Find the corresponding image in Folder B
-                # Assuming the images have the exact same filename. 
-                # If they don't, you can change this to get_latest_file(CONFIG['stream_folder_b'])
-                filename = os.path.basename(latest_image_a)
-                image_b_path = os.path.join(CONFIG['stream_folder_b'], filename)
+                # 3. Find the corresponding image in Folder A (🔥 CHANGED)
+                filename = os.path.basename(latest_image_b)
+                image_a_path = os.path.join(CONFIG['stream_folder_a'], filename)
 
-                if os.path.exists(image_b_path):
+                if os.path.exists(image_a_path):
                     try:
                         logger.info(f"Processing new pair: {filename}")
                         
-                        # Run the detection
-                        result = detect(latest_image_a, image_b_path, classifier, yolo_model, transform, device)
+                        # Run the detection - Note: arguments are (image_a_path, image_b_path)
+                        result = detect(image_a_path, latest_image_b, classifier, yolo_model, transform, device)
                         
                         # Print Results
                         print("\n" + "="*50)
@@ -273,13 +271,13 @@ def main():
                         print(f"Decision: {result['status_message']}")
                         print("="*50 + "\n")
                         
-                        # Update the tracker so we don't process it again
-                        last_processed_image_a = latest_image_a
+                        # Update the tracker so we don't process it again (🔥 CHANGED)
+                        last_processed_image_b = latest_image_b
 
                     except Exception as e:
                         logger.error(f"Failed to process {filename}: {e}")
                 else:
-                    logger.warning(f"Found {filename} in Folder A, but missing in Folder B. Waiting...")
+                    logger.warning(f"Found {filename} in Folder B, but missing in Folder A. Waiting...")
 
             # 4. Wait before polling again to save CPU cycles
             time.sleep(CONFIG['poll_interval'])
