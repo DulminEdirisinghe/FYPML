@@ -1,0 +1,89 @@
+import os
+import time
+import random
+import shutil
+from datetime import datetime
+
+# ============== CONFIG ==============
+# Folders containing your actual images (update these to your real paths)
+SOURCE_FOLDER_A = 'data/SCD_Images_224'
+SOURCE_FOLDER_B = 'data/YOLO_data/split/moving/val/images'
+
+# The folders the detector script is actively watching
+STREAM_FOLDER_A = 'runs/folder_a'
+STREAM_FOLDER_B = 'runs/folder_b'
+
+MAX_IMAGES_TO_KEEP = 2  # Prevent folder from getting cluttered
+STREAM_DELAY = 7.0      # Seconds between new images (simulates frame rate)
+
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+
+def cleanup_old_files(folder_path):
+    """Keeps only the newest 'MAX_IMAGES_TO_KEEP' files in the folder."""
+    files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
+    
+    if len(files) > MAX_IMAGES_TO_KEEP:
+        # Sort files by creation time, oldest first
+        files.sort(key=os.path.getctime)
+        
+        # Delete the oldest files until we reach our max limit
+        files_to_delete = files[:-MAX_IMAGES_TO_KEEP]
+        for f in files_to_delete:
+            try:
+                os.remove(f)
+            except Exception as e:
+                print(f"Could not delete {f}: {e}")
+
+def main():
+    print("Starting Stream Simulator...")
+    
+    ensure_dir(STREAM_FOLDER_A)
+    ensure_dir(STREAM_FOLDER_B)
+
+    # Get a list of all images in the source folders
+    src_images_a = [f for f in os.listdir(SOURCE_FOLDER_A) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    src_images_b = [f for f in os.listdir(SOURCE_FOLDER_B) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+    if not src_images_a or not src_images_b:
+        print("Error: Source folders are empty or don't exist. Please check your source paths.")
+        return
+
+    print(f"Found {len(src_images_a)} images in Source A.")
+    print(f"Found {len(src_images_b)} images in Source B.")
+    print(f"Simulating stream at 1 frame every {STREAM_DELAY} seconds...\n")
+
+    try:
+        while True:
+            # 1. Pick random images
+            random_img_a = random.choice(src_images_a)
+            random_img_b = random.choice(src_images_b)
+
+            src_path_a = os.path.join(SOURCE_FOLDER_A, random_img_a)
+            src_path_b = os.path.join(SOURCE_FOLDER_B, random_img_b)
+
+            # 2. Create a unified filename based on the current time
+            timestamp = int(time.time() * 1000)
+            common_filename = f"frame_{timestamp}.png"
+
+            dest_path_a = os.path.join(STREAM_FOLDER_A, common_filename)
+            dest_path_b = os.path.join(STREAM_FOLDER_B, common_filename)
+
+            # 3. Copy files to the stream folders
+            shutil.copy(src_path_a, dest_path_a)
+            shutil.copy(src_path_b, dest_path_b)
+
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Streamed pair: {common_filename}")
+
+            # 4. Clean up old files to avoid clutter
+            cleanup_old_files(STREAM_FOLDER_A)
+            cleanup_old_files(STREAM_FOLDER_B)
+
+            # 5. Wait before sending the next frame
+            time.sleep(STREAM_DELAY)
+
+    except KeyboardInterrupt:
+        print("\nStream simulator stopped.")
+
+if __name__ == "__main__":
+    main()
