@@ -46,8 +46,8 @@ logger = setup_logger()
 
 # ============== CONFIG ==============
 CONFIG = {
-    'train_dir': 'data/SCD_Images_224',
-    'test_dir': None,
+    'train_dir': 'data/data/v2/SCD_images/train',
+    'test_dir': 'data/data/v2/SCD_images/test',
     'batch_size': 32,
     'num_epochs': 10,
     'learning_rate': 0.001,

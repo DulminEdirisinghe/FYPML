@@ -9,8 +9,8 @@ from src.bench_dataset import DronePairDataset
 
 # ============== CONFIG ==============
 # Folders containing your actual images (update these to your real paths)
-SOURCE_FOLDER_A = 'data/data/SCD_Images/test'
-SOURCE_FOLDER_B = 'data/data/YOLO_data/stationary/test'
+SOURCE_FOLDER_A = 'data/data/v2/SCD_images/test'  # Folder A (e.g., SCD images)
+SOURCE_FOLDER_B = 'data/data/v2/YOLO/stationary/test'
 
 # The folders the detector script is actively watching
 STREAM_FOLDER_A = 'runs/folder_a'

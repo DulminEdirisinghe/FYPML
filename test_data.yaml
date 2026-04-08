@@ -13,13 +13,18 @@
 # nc: 3
 # names: ['phantom', 'mavic', 'vimana']
 
-# train: /home/dulmin/FYPML/data/YOLO_data/split/moving/train
-# val: /home/dulmin/FYPML/data/YOLO_data/split/moving/val
-# test: /home/dulmin/FYPML/data/YOLO_data/split/moving/val
+# train: /home/dulmin/FYPML/data/data/v2/YOLO/moving/train/images
+# val: /home/dulmin/FYPML/data/data/v2/YOLO/moving/test/images
+# test: /home/dulmin/FYPML/data/data/v2/YOLO/moving/test/images
 
-train: /home/dulmin/FYPML/data/YOLO_data/split/stationary/train
-val: /home/dulmin/FYPML/data/YOLO_data/split/stationary/val
-test: /home/dulmin/FYPML/data/YOLO_data/split/stationary/val
+# train: /home/dulmin/FYPML/data/data/v2/YOLO/stationary/train/images
+# val: /home/dulmin/FYPML/data/data/v2/YOLO/stationary/test/images
+# test: /home/dulmin/FYPML/data/data/v2/YOLO/stationary/test/images
+
+train: /home/dulmin/FYPML/data/data/v2/YOLO/combned/train/images
+val: /home/dulmin/FYPML/data/data/v2/YOLO/combned/test/images
+test: /home/dulmin/FYPML/data/data/v2/YOLO/combned/test/images
+
 
 nc: 1
 names: ['phantom']

@@ -45,12 +45,12 @@ logger = setup_logger()
 
 # ============== CONFIG ==============
 CONFIG = {
-    'classifier_model_path': 'weights/efficientnet_classifier_model.pth',
+    'classifier_model_path': 'weights/v2/efficientnet_classifier_model.pth',
     'classifier_model_name': 'efficientnet_b0',
     'num_classes': 2,
     'class_names': ['no_drone', 'drone'],
 
-    'T1': 0.5,
+    'T1': 0.51,
     'T2': 0.3,
 
     'fusion_w1': 1.0,
@@ -58,7 +58,7 @@ CONFIG = {
     'fusion_b': 0.0,
 
     'yolo_model_yaml': 'ultralytics/cfg/models/11/yolo11.yaml',
-    'yolo_weights_path': 'weights/phase1_cv3_model.pt',
+    'yolo_weights_path': 'weights/v2/phase1_cv3_model.pt',
     'yolo_imgsz': 640,
     'yolo_device': 'cuda',
     'yolo_nc': 1,
@@ -179,7 +179,12 @@ def detect(image_path_a, image_path_b, classifier, yolo_model, transform, device
     yolo_result = run_yolo(image_path_b, yolo_model)
     F = yolo_result['max_confidence']
 
+    # 🔥 NEW: print model scores before fusion
+    logger.info(f"Model Scores - EfficientNet (P4): {P4:.4f}, YOLO (F): {F:.4f}")
+
     G = logistic_fusion(F, P4)
+    # G= (1*P4 + 1*F )/2
+
 
     # 🔥 NEW: base result (used in GUI)
     base_result = {
@@ -232,52 +237,72 @@ def get_latest_file(folder_path):
 def main():
     logger.info("Loading models...")
     classifier, yolo_model, transform, device = load_all_models()
-    logger.info("Models loaded successfully. Starting real-time folder monitoring...")
+    print("Models loaded successfully. Starting real-time folder monitoring...")
 
     # Ensure directories exist
     os.makedirs(CONFIG['stream_folder_a'], exist_ok=True)
     os.makedirs(CONFIG['stream_folder_b'], exist_ok=True)
 
-    # 🔥 CHANGED: Tracking the last processed file from Folder B instead
-    last_processed_image_b = None
+    # 🔥 CHANGED: Track latest processed times for both folders independently
+    last_processed_time_a = None
+    last_processed_time_b = None
 
     try:
         while True:
-            # 1. Look at Folder B for the newest image (🔥 CHANGED)
+            # 1. Get the latest image from Folder A by timestamp (🔥 CHANGED)
+            latest_image_a = get_latest_file(CONFIG['stream_folder_a'])
+            
+            # 2. Get the latest image from Folder B by timestamp (🔥 CHANGED)
             latest_image_b = get_latest_file(CONFIG['stream_folder_b'])
 
-            # 2. If we found a new image that we haven't processed yet (🔥 CHANGED)
-            if latest_image_b and latest_image_b != last_processed_image_b:
+            # 3. If we have both images (🔥 CHANGED)
+            if latest_image_a and latest_image_b:
+                time_a = os.path.getctime(latest_image_a)
+                time_b = os.path.getctime(latest_image_b)
                 
-                # Tiny sleep to ensure the file isn't still being written by your camera stream
-                time.sleep(0.1) 
+                # Check if we have actual new images (greater than previous) (🔥 CHANGED)
+                has_update_a = last_processed_time_a is None or time_a > last_processed_time_a
+                has_update_b = last_processed_time_b is None or time_b > last_processed_time_b
                 
-                # 3. Find the corresponding image in Folder A (🔥 CHANGED)
-                filename = os.path.basename(latest_image_b)
-                image_a_path = os.path.join(CONFIG['stream_folder_a'], filename)
-
-                if os.path.exists(image_a_path):
+                # Process only if BOTH folders have newer images (🔥 CHANGED)
+                if has_update_a and has_update_b:
+                    
+                    # Tiny sleep to ensure files aren't still being written
+                    time.sleep(0.1) 
+                    
                     try:
-                        logger.info(f"Processing new pair: {filename}")
+                        filename_a = os.path.basename(latest_image_a)
+                        filename_b = os.path.basename(latest_image_b)
+                        
+                        logger.info(f"Processing new pair")
+                        logger.info(f"Folder A image: {latest_image_a} (timestamp: {time_a})")
+                        logger.info(f"Folder B image: {latest_image_b} (timestamp: {time_b})")
                         
                         # Run the detection - Note: arguments are (image_a_path, image_b_path)
-                        result = detect(image_a_path, latest_image_b, classifier, yolo_model, transform, device)
+                        result = detect(latest_image_a, latest_image_b, classifier, yolo_model, transform, device)
                         
                         # Print Results
                         print("\n" + "="*50)
                         print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                        print(f"File: {filename}")
+                        print(f"Folder A: {filename_a}, Folder B: {filename_b}")
                         print(f"Fusion Score (G): {result['G']:.4f}")
                         print(f"Decision: {result['status_message']}")
                         print("="*50 + "\n")
                         
-                        # Update the tracker so we don't process it again (🔥 CHANGED)
-                        last_processed_image_b = latest_image_b
+                        # Update trackers for both folders (🔥 CHANGED)
+                        last_processed_time_a = time_a
+                        last_processed_time_b = time_b
 
                     except Exception as e:
-                        logger.error(f"Failed to process {filename}: {e}")
+                        logger.error(f"Failed to process image pair: {e}")
                 else:
-                    logger.warning(f"Found {filename} in Folder B, but missing in Folder A. Waiting...")
+                    # No update - show message (🔥 NEW)
+                    logger.info(f"NO update in 5s - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                if not latest_image_a:
+                    logger.warning("No images found in Folder A")
+                if not latest_image_b:
+                    logger.warning("No images found in Folder B")
 
             # 4. Wait before polling again to save CPU cycles
             time.sleep(CONFIG['poll_interval'])

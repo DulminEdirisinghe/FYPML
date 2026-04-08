@@ -1,19 +1,27 @@
 import os
-import tempfile
 from collections import Counter
 from datetime import datetime
 
 import streamlit as st
-import torch
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
 
-from fuse_detector import load_all_models, detect
+from pipeline import load_all_models, detect, CONFIG, get_latest_file
 
 st.set_page_config(
     page_title="Drone Detection Dashboard",
     page_icon="🚁",
     layout="wide",
     initial_sidebar_state="collapsed"
+)
+
+# =========================
+# Auto refresh
+# =========================
+refresh_seconds = int(CONFIG.get("poll_interval", 2))
+st_autorefresh(
+    interval=refresh_seconds * 1000,
+    key="stream_refresh"
 )
 
 # =========================
@@ -99,6 +107,7 @@ html, body, [class*="css"] {
     font-weight: 800;
     color: white;
     margin-bottom: 4px;
+    word-break: break-word;
 }
 
 .metric-side-label {
@@ -128,21 +137,6 @@ html, body, [class*="css"] {
     background: linear-gradient(90deg, #b42318, #ef5350);
 }
 
-.stButton > button {
-    background: linear-gradient(90deg, #0d6efd, #0aa2ff);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    font-weight: 700;
-    padding: 0.7rem 1.2rem;
-    width: 100%;
-}
-
-.stButton > button:hover {
-    background: linear-gradient(90deg, #0b5ed7, #0891e6);
-    color: white;
-}
-
 .small-note {
     font-size: 13px;
     color: #9db1c4;
@@ -170,6 +164,12 @@ classifier, yolo_model, transform, device = get_models()
 # =========================
 if "history" not in st.session_state:
     st.session_state.history = []
+
+if "last_processed_file" not in st.session_state:
+    st.session_state.last_processed_file = None
+
+if "latest_result" not in st.session_state:
+    st.session_state.latest_result = None
 
 # =========================
 # Helpers
@@ -204,16 +204,38 @@ def get_status_class(decision):
     return "status-red"
 
 
-def run_detection(image_path_a, image_path_b):
+def process_latest_stream_pair():
+    image_a = get_latest_file(CONFIG['stream_folder_a'])
+    if not image_a:
+        return st.session_state.latest_result
+
+    filename = os.path.basename(image_a)
+    image_b = os.path.join(CONFIG['stream_folder_b'], filename)
+
+    if not os.path.exists(image_b):
+        return st.session_state.latest_result
+
+    if st.session_state.last_processed_file == filename:
+        return st.session_state.latest_result
+
     result = detect(
-        image_path_a=image_path_a,
-        image_path_b=image_path_b,
+        image_path_a=image_a,
+        image_path_b=image_b,
         classifier=classifier,
         yolo_model=yolo_model,
         transform=transform,
         device=device
     )
+
+    result["stream_filename"] = filename
+    result["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    result["stream_image_a_path"] = image_a
+    result["stream_image_b_path"] = image_b
+
+    st.session_state.last_processed_file = filename
+    st.session_state.latest_result = result
     st.session_state.history.append(result)
+
     return result
 
 # =========================
@@ -226,7 +248,7 @@ st.markdown(f"""
     <div class="topbar-row">
         <div>
             <div class="topbar-title">DRONE DETECTION DASHBOARD</div>
-            <div class="topbar-subtitle">Fusion-based drone monitoring using EfficientNet and YOLO</div>
+            <div class="topbar-subtitle">Real-time fusion monitoring using EfficientNet and YOLO</div>
         </div>
         <div class="topbar-date">Date<br><b>{current_date}</b></div>
     </div>
@@ -234,52 +256,10 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # =========================
-# Upload + Run section
+# Process latest pair
 # =========================
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="panel-title">Input Control</div>', unsafe_allow_html=True)
-
-up1, up2, up3 = st.columns([1.2, 1.2, 0.8])
-
-image_path_a = None
-image_path_b = None
-
-with up1:
-    scd_file = st.file_uploader("Upload SCD Image", type=["png", "jpg", "jpeg"], key="dashboard_scd")
-
-with up2:
-    wavelet_file = st.file_uploader("Upload Wavelet Image", type=["png", "jpg", "jpeg"], key="dashboard_wavelet")
-
-if scd_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_a:
-        tmp_a.write(scd_file.read())
-        image_path_a = tmp_a.name
-
-if wavelet_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_b:
-        tmp_b.write(wavelet_file.read())
-        image_path_b = tmp_b.name
-
-with up3:
-    run_clicked = st.button("Run Detection")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# Run detection
-# =========================
-if run_clicked:
-    if not image_path_a or not image_path_b:
-        st.error("Please upload both SCD and wavelet images.")
-    else:
-        with st.spinner("Running fusion detector..."):
-            try:
-                run_detection(image_path_a, image_path_b)
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-
+latest = process_latest_stream_pair()
 history = st.session_state.history
-latest = history[-1] if history else None
 
 # =========================
 # Dashboard main
@@ -292,9 +272,8 @@ with left_stats:
     st.markdown('<div class="panel-title">Latest Detection</div>', unsafe_allow_html=True)
 
     if latest:
-        detected_text = "Yes" if latest.get("detected", False) else "No"
-        drone_type = latest.get("drone_type", "N/A")
-        num_detections = latest.get("num_detections", 0)
+        detected_text = "Yes" if latest.get("final_decision") != "NOdrone" else "No"
+        drone_type = latest.get("drone_type") or "-"
 
         st.markdown(f"""
         <div class="metric-side">
@@ -310,13 +289,6 @@ with left_stats:
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div class="metric-side">
-            <div class="metric-side-number">{num_detections}</div>
-            <div class="metric-side-label">Number of Detections</div>
-        </div>
-        """, unsafe_allow_html=True)
-
         decision = latest.get("final_decision", "Unknown")
         status_class = get_status_class(decision)
         status_message = latest.get("status_message", decision)
@@ -326,7 +298,7 @@ with left_stats:
             unsafe_allow_html=True
         )
     else:
-        st.info("No detection run yet.")
+        st.info("Waiting for stream input...")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -347,13 +319,18 @@ with center_stats:
         st.plotly_chart(fig, use_container_width=True)
 
         total_runs = len(history)
-        total_detections = sum(int(x.get("num_detections", 0)) for x in history)
         typed_runs = sum(1 for x in history if x.get("final_decision") == "DroneType")
+        nodrone_runs = sum(1 for x in history if x.get("final_decision") == "NOdrone")
 
         row1, row2, row3 = st.columns(3)
         row1.metric("Total Runs", total_runs)
-        row2.metric("Total Detections", total_detections)
-        row3.metric("Type Classified Runs", typed_runs)
+        row2.metric("Type Classified Runs", typed_runs)
+        row3.metric("No-Drone Runs", nodrone_runs)
+
+        if latest:
+            st.markdown("#### Latest Stream Frame")
+            st.write(f"**File:** {latest.get('stream_filename', 'N/A')}")
+            st.write(f"**Timestamp:** {latest.get('timestamp', 'N/A')}")
     else:
         st.info("No statistics available yet.")
 
@@ -365,9 +342,9 @@ with right_stats:
     st.markdown('<div class="panel-title">Fusion Outputs</div>', unsafe_allow_html=True)
 
     if latest:
-        p4 = float(latest.get("P4_efficientnet_drone_prob", 0.0))
-        f_val = float(latest.get("F_yolo_max_prob", 0.0))
-        g_val = float(latest.get("G_fused_prob", 0.0))
+        p4 = float(latest.get("P4", 0.0))
+        f_val = float(latest.get("F", 0.0))
+        g_val = float(latest.get("G", 0.0))
 
         st.markdown(f"""
         <div class="metric-side">
@@ -393,6 +370,41 @@ with right_stats:
         st.info("No fusion outputs available yet.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+# =========================
+# Latest Detection Images
+# =========================
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="panel-title">Latest Detection Images</div>', unsafe_allow_html=True)
+
+if latest:
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**EfficientNet Input( SCD Image )**")
+        image_a_path = latest.get("stream_image_a_path")
+
+        if image_a_path and os.path.exists(image_a_path):
+            st.image(image_a_path, use_container_width=True)
+        else:
+            st.warning("SCD image not found")
+
+    with col2:
+        st.markdown("**YOLO Detection Output (Wavelet Image)**")
+        yolo_img_path = latest.get("saved_detection_image")
+
+        if yolo_img_path and os.path.exists(yolo_img_path):
+            st.image(yolo_img_path, use_container_width=True)
+        else:
+            image_b_path = latest.get("stream_image_b_path")
+            if image_b_path and os.path.exists(image_b_path):
+                st.image(image_b_path, use_container_width=True)
+            else:
+                st.warning("YOLO image not found")
+else:
+    st.info("Waiting for first detection...")
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
 # Optional JSON
