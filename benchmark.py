@@ -12,8 +12,8 @@ from src.bench_dataset import DronePairDataset
 from pipeline import load_all_models, detect, CONFIG
 
 # ============== CONFIGURATIONS ==============
-FOLDER_A_TEST = 'data/data/SCD_images/test'
-FOLDER_B_TEST = 'data/data/YOLO_data/stationary/test'
+FOLDER_A_TEST = 'data/data/v2/SCD_images/test'
+FOLDER_B_TEST = 'data/data/v2/YOLO/stationary/test'
 
 PLOT_SAVE_DIR = 'runs/benchmark_plots'  # Folder where all pair plots will be saved
 

@@ -62,7 +62,7 @@ CONFIG = {
     'yolo_imgsz': 640,
     'yolo_device': 'cuda',
     'yolo_nc': 1,
-    'yolo_class_names': ['phantom'],
+    'yolo_class_names': ['Phantom'],
 
     'output_dir': 'outputs',  # 🔥 NEW
 
@@ -199,7 +199,7 @@ def detect(image_path_a, image_path_b, classifier, yolo_model, transform, device
         return {
             **base_result,
             'final_decision': 'NOdrone',
-            'status_message': 'No drone detected'  # 🔥 NEW
+            'status_message': 'No Drone Detected'  # 🔥 NEW
         }
 
     if F > CONFIG['T2']:
@@ -207,13 +207,13 @@ def detect(image_path_a, image_path_b, classifier, yolo_model, transform, device
             **base_result,
             'final_decision': 'DroneType',
             'drone_type': yolo_result['best_class_name'],
-            'status_message': f"Drone detected: {yolo_result['best_class_name']}"  # 🔥 NEW
+            'status_message': f"Drone Detected: {yolo_result['best_class_name']}"  # 🔥 NEW
         }
 
     return {
         **base_result,
         'final_decision': 'Detected',
-        'status_message': 'Drone detected but type uncertain'  # 🔥 NEW
+        'status_message': 'Drone Detected But Type Uncertain'  # 🔥 NEW
     }
 
 

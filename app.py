@@ -1,9 +1,7 @@
 import os
-from collections import Counter
 from datetime import datetime
 
 import streamlit as st
-import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
 from pipeline import load_all_models, detect, CONFIG, get_latest_file
@@ -19,10 +17,7 @@ st.set_page_config(
 # Auto refresh
 # =========================
 refresh_seconds = int(CONFIG.get("poll_interval", 2))
-st_autorefresh(
-    interval=refresh_seconds * 1000,
-    key="stream_refresh"
-)
+st_autorefresh(interval=refresh_seconds * 1000, key="stream_refresh")
 
 # =========================
 # Custom CSS
@@ -78,21 +73,7 @@ html, body, [class*="css"] {
     text-align: center;
 }
 
-.panel {
-    background: rgba(9, 20, 34, 0.96);
-    border: 1px solid #17324a;
-    border-radius: 16px;
-    padding: 16px;
-    margin-bottom: 14px;
-    min-height: 100%;
-}
 
-.panel-title {
-    font-size: 18px;
-    font-weight: 700;
-    margin-bottom: 12px;
-    color: #eef4fb;
-}
 
 .metric-side {
     background: linear-gradient(180deg, #0e1c2c, #10253a);
@@ -140,12 +121,26 @@ html, body, [class*="css"] {
 .small-note {
     font-size: 13px;
     color: #9db1c4;
+    margin-top: 6px;
+    line-height: 1.5;
+}
+
+# .pair-card {
+#     background: linear-gradient(180deg, #0d1c2d, #11263a);
+#     border: 1px solid #1d3f5c;
+#     border-radius: 16px;
+#     padding: 14px;
+#     margin-bottom: 16px;
+# }
+
+.section-gap {
+    margin-top: 10px;
 }
 
 hr {
     border: none;
     border-top: 1px solid #18324a;
-    margin: 12px 0;
+    margin: 14px 0;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -165,37 +160,21 @@ classifier, yolo_model, transform, device = get_models()
 if "history" not in st.session_state:
     st.session_state.history = []
 
-if "last_processed_file" not in st.session_state:
-    st.session_state.last_processed_file = None
-
 if "latest_result" not in st.session_state:
     st.session_state.latest_result = None
+
+if "last_processed_time_a" not in st.session_state:
+    st.session_state.last_processed_time_a = None
+
+if "last_processed_time_b" not in st.session_state:
+    st.session_state.last_processed_time_b = None
+
+if "last_update_message" not in st.session_state:
+    st.session_state.last_update_message = "Waiting for stream input..."
 
 # =========================
 # Helpers
 # =========================
-def make_donut_chart(title, labels, values, colors):
-    fig = go.Figure(
-        data=[go.Pie(
-            labels=labels,
-            values=values,
-            hole=0.68,
-            textinfo='percent',
-            textfont=dict(color='white', size=14),
-            marker=dict(colors=colors, line=dict(color="#08111f", width=2))
-        )]
-    )
-    fig.update_layout(
-        title=dict(text=title, font=dict(color="white", size=18)),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        margin=dict(t=50, b=20, l=20, r=20),
-        legend=dict(font=dict(color='white'))
-    )
-    return fig
-
-
 def get_status_class(decision):
     if decision == "DroneType":
         return "status-green"
@@ -205,38 +184,121 @@ def get_status_class(decision):
 
 
 def process_latest_stream_pair():
-    image_a = get_latest_file(CONFIG['stream_folder_a'])
-    if not image_a:
+    folder_a = CONFIG["stream_folder_a"]
+    folder_b = CONFIG["stream_folder_b"]
+
+    image_a = get_latest_file(folder_a)
+    image_b = get_latest_file(folder_b)
+
+    if not image_a or not image_b:
+        if not image_a and not image_b:
+            st.session_state.last_update_message = "Waiting for images in both folders..."
+        elif not image_a:
+            st.session_state.last_update_message = "Waiting for SCD image in folder A..."
+        else:
+            st.session_state.last_update_message = "Waiting for wavelet image in folder B..."
         return st.session_state.latest_result
 
-    filename = os.path.basename(image_a)
-    image_b = os.path.join(CONFIG['stream_folder_b'], filename)
-
-    if not os.path.exists(image_b):
+    try:
+        time_a = os.path.getctime(image_a)
+        time_b = os.path.getctime(image_b)
+    except OSError:
+        st.session_state.last_update_message = "Could not read image timestamps."
         return st.session_state.latest_result
 
-    if st.session_state.last_processed_file == filename:
-        return st.session_state.latest_result
-
-    result = detect(
-        image_path_a=image_a,
-        image_path_b=image_b,
-        classifier=classifier,
-        yolo_model=yolo_model,
-        transform=transform,
-        device=device
+    has_new_a = (
+        st.session_state.last_processed_time_a is None
+        or time_a > st.session_state.last_processed_time_a
+    )
+    has_new_b = (
+        st.session_state.last_processed_time_b is None
+        or time_b > st.session_state.last_processed_time_b
     )
 
-    result["stream_filename"] = filename
-    result["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    result["stream_image_a_path"] = image_a
-    result["stream_image_b_path"] = image_b
+    if not (has_new_a and has_new_b):
+        return st.session_state.latest_result
 
-    st.session_state.last_processed_file = filename
-    st.session_state.latest_result = result
-    st.session_state.history.append(result)
+    try:
+        result = detect(
+            image_path_a=image_a,
+            image_path_b=image_b,
+            classifier=classifier,
+            yolo_model=yolo_model,
+            transform=transform,
+            device=device
+        )
 
-    return result
+        result["stream_filename_a"] = os.path.basename(image_a)
+        result["stream_filename_b"] = os.path.basename(image_b)
+        result["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        result["stream_image_a_path"] = image_a
+        result["stream_image_b_path"] = image_b
+        result["timestamp_a"] = time_a
+        result["timestamp_b"] = time_b
+
+        st.session_state.last_processed_time_a = time_a
+        st.session_state.last_processed_time_b = time_b
+        st.session_state.latest_result = result
+        st.session_state.history.append(result)
+
+        # Keep only last 1000 results
+        st.session_state.history = st.session_state.history[-1000:]
+
+        st.session_state.last_update_message = "New pair processed successfully."
+        return result
+
+    except Exception as e:
+        st.session_state.last_update_message = f"Processing failed: {e}"
+        return st.session_state.latest_result
+
+
+def show_pair_images(item):
+    st.markdown("""
+    <div class="pair-card"></div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**SCD Image / EfficientNet Input**")
+        img_a = item.get("stream_image_a_path")
+        if img_a and os.path.exists(img_a):
+            st.image(img_a, use_container_width=True)
+        else:
+            st.warning("Image A not found")
+
+    with col2:
+        st.markdown("**Wavelet / YOLO Output**")
+        yolo_img = item.get("saved_detection_image")
+        img_b = item.get("stream_image_b_path")
+
+        if yolo_img and os.path.exists(yolo_img):
+            st.image(yolo_img, use_container_width=True)
+        elif img_b and os.path.exists(img_b):
+            st.image(img_b, use_container_width=True)
+        else:
+            st.warning("Image B not found")
+
+    decision = item.get("final_decision", "Unknown")
+    status_class = get_status_class(decision)
+    status_message = item.get("status_message", decision)
+
+    st.markdown(
+        f'<div class="status-pill {status_class}">{status_message}</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        f"""
+        <div class="small-note">
+            <b>Time:</b> {item.get('timestamp', 'N/A')}<br>
+            <b>Folder A:</b> {item.get('stream_filename_a', 'N/A')}<br>
+            <b>Folder B:</b> {item.get('stream_filename_b', 'N/A')}<br>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 # =========================
 # Header
@@ -264,16 +326,16 @@ history = st.session_state.history
 # =========================
 # Dashboard main
 # =========================
-left_stats, center_stats, right_stats = st.columns([0.95, 2.8, 0.95])
+left_stats, center_stats, right_stats = st.columns([1.0, 2.8, 1.0])
 
-# Left side boxes
+# Left side
 with left_stats:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">Latest Detection</div>', unsafe_allow_html=True)
 
     if latest:
-        detected_text = "Yes" if latest.get("final_decision") != "NOdrone" else "No"
-        drone_type = latest.get("drone_type") or "-"
+        detected_text = "Detected" if latest.get("final_decision") != "NOdrone" else "Not Detected"
+        drone_type = latest.get("drone_type", "-")
 
         st.markdown(f"""
         <div class="metric-side">
@@ -298,45 +360,40 @@ with left_stats:
             unsafe_allow_html=True
         )
     else:
-        st.info("Waiting for stream input...")
+        st.info(st.session_state.last_update_message)
 
+    st.markdown(
+        f"<p class='small-note'>{st.session_state.last_update_message}</p>",
+        unsafe_allow_html=True
+    )
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Center section
 with center_stats:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Detection Statistics</div>', unsafe_allow_html=True)
-
     if history:
-        decision_counts = Counter([x.get("final_decision", "Unknown") for x in history])
+        recent_items = history[-2:][::-1]
 
-        fig = make_donut_chart(
-            "Final Decision Distribution",
-            list(decision_counts.keys()),
-            list(decision_counts.values()),
-            ["#1fbf75", "#ffb020", "#ef5350", "#64748b"]
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        for idx, item in enumerate(recent_items, start=1):
+            show_pair_images(item)
+
+            if idx < len(recent_items):
+                st.markdown("<hr>", unsafe_allow_html=True)
 
         total_runs = len(history)
         typed_runs = sum(1 for x in history if x.get("final_decision") == "DroneType")
+        uncertain_runs = sum(1 for x in history if x.get("final_decision") == "Detected")
         nodrone_runs = sum(1 for x in history if x.get("final_decision") == "NOdrone")
 
-        row1, row2, row3 = st.columns(3)
-        row1.metric("Total Runs", total_runs)
-        row2.metric("Type Classified Runs", typed_runs)
-        row3.metric("No-Drone Runs", nodrone_runs)
-
-        if latest:
-            st.markdown("#### Latest Stream Frame")
-            st.write(f"**File:** {latest.get('stream_filename', 'N/A')}")
-            st.write(f"**Timestamp:** {latest.get('timestamp', 'N/A')}")
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Runs", total_runs)
+        c2.metric("Typed Runs", typed_runs)
+        c3.metric("Uncertain", uncertain_runs)
+        c4.metric("No-Drone", nodrone_runs)
     else:
-        st.info("No statistics available yet.")
+        st.info("No image pairs available yet.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# Right side boxes
+# Right side
 with right_stats:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">Fusion Outputs</div>', unsafe_allow_html=True)
@@ -372,42 +429,7 @@ with right_stats:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# Latest Detection Images
-# =========================
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="panel-title">Latest Detection Images</div>', unsafe_allow_html=True)
-
-if latest:
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("**EfficientNet Input( SCD Image )**")
-        image_a_path = latest.get("stream_image_a_path")
-
-        if image_a_path and os.path.exists(image_a_path):
-            st.image(image_a_path, use_container_width=True)
-        else:
-            st.warning("SCD image not found")
-
-    with col2:
-        st.markdown("**YOLO Detection Output (Wavelet Image)**")
-        yolo_img_path = latest.get("saved_detection_image")
-
-        if yolo_img_path and os.path.exists(yolo_img_path):
-            st.image(yolo_img_path, use_container_width=True)
-        else:
-            image_b_path = latest.get("stream_image_b_path")
-            if image_b_path and os.path.exists(image_b_path):
-                st.image(image_b_path, use_container_width=True)
-            else:
-                st.warning("YOLO image not found")
-else:
-    st.info("Waiting for first detection...")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# Optional JSON
+# Latest JSON
 # =========================
 if latest:
     st.markdown("### Latest Detection JSON")
