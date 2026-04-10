@@ -50,12 +50,14 @@ CONFIG = {
     'num_classes': 2,
     'class_names': ['no_drone', 'drone'],
 
-    'T1': 0.51,
-    'T2': 0.3,
+    'T1': 0.4, #0.51,
+    'T2': 0.2, #0.3,
 
-    'fusion_w1': 1.0,
-    'fusion_w2': 1.0,
-    'fusion_b': 0.0,
+    'fusion_w1': 1.5,#1.0,
+    'fusion_w2': 0.5,#1.0,
+    'fusion_b': -1.0,#0
+
+    # Best params -> w1=1.5, w2=0.5, b=-1.0, T1=0.4, T2=0.2 | bin_acc=99.44%, class_acc=100.00%
 
     'yolo_model_yaml': 'ultralytics/cfg/models/11/yolo11.yaml',
     'yolo_weights_path': 'weights/v2/phase1_cv3_model.pt',

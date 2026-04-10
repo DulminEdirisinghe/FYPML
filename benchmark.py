@@ -15,7 +15,12 @@ from pipeline import load_all_models, detect, CONFIG
 FOLDER_A_TEST = 'data/data/v2/SCD_images/test'
 FOLDER_B_TEST = 'data/data/v2/YOLO/stationary/test'
 
-PLOT_SAVE_DIR = 'runs/benchmark_plots'  # Folder where all pair plots will be saved
+PLOT_SAVE_DIR = 'runs/benchmark_v2'  # Folder where all pair plots will be saved
+
+# Save benchmark txt next to this script by default (more obvious location).
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_TXT_PATH = os.path.join(SCRIPT_DIR, 'benchmark_results.txt')
+K_EXAMPLES = 5  # number of correct and wrong examples to plot
 
 
 # ============== PLOTTING UTILITY ==============
@@ -105,7 +110,11 @@ def run_benchmark():
     # Tracking dictionary for RANGE-WISE metrics
     range_metrics = {}
 
+    # Collect text output to also save to a .txt file
+    results_lines = []
+
     print("\nStarting Evaluation...")
+    results_lines.append("Starting Evaluation...\n")
     
     for i in range(len(dataset)):
         data = dataset[i]
@@ -134,12 +143,16 @@ def run_benchmark():
             pred_class = 'uncertain'
         else:
             pred_class = 'no_drone'
+
+        # Normalize class labels for evaluation to avoid case-mismatch issues
+        gt_class_eval = gt_class.lower() if isinstance(gt_class, str) else gt_class
+        pred_class_eval = pred_class.lower() if isinstance(pred_class, str) else pred_class
             
         # 4. Append to overall metric lists
         y_true_binary.append(gt_is_drone)
         y_pred_binary.append(pred_is_drone)
-        y_true_class.append(gt_class)
-        y_pred_class.append(pred_class)
+        y_true_class.append(gt_class_eval)
+        y_pred_class.append(pred_class_eval)
         
         # 5. Track Range-wise Metrics
         if dist not in range_metrics:
@@ -157,7 +170,7 @@ def run_benchmark():
             
         if gt_is_drone:
             range_metrics[dist]['cls_total'] += 1
-            if gt_class == pred_class:
+            if gt_class_eval == pred_class_eval:
                 range_metrics[dist]['cls_correct'] += 1
         
         # 6. Save detailed results for plotting
@@ -179,12 +192,18 @@ def run_benchmark():
             print(f"Processed {i + 1}/{len(dataset)} pairs...")
 
     # ============== CALCULATE OVERALL METRICS ==============
-    print("\n" + "="*50)
+    header_overall = "\n" + "="*50
+    print(header_overall)
     print("🎯 OVERALL BENCHMARK RESULTS")
     print("="*50)
-    
+    results_lines.append(header_overall)
+    results_lines.append("🎯 OVERALL BENCHMARK RESULTS")
+    results_lines.append("="*50)
+
     bin_acc = accuracy_score(y_true_binary, y_pred_binary)
-    print(f"\n1. Drone / No Drone Detection Accuracy: {bin_acc * 100:.2f}%")
+    line_bin = f"\n1. Drone / No Drone Detection Accuracy: {bin_acc * 100:.2f}%"
+    print(line_bin)
+    results_lines.append(line_bin)
     
     true_drones_indices = [i for i, x in enumerate(y_true_binary) if x == True]
     
@@ -193,16 +212,29 @@ def run_benchmark():
         y_pred_drones_only = [y_pred_class[i] for i in true_drones_indices]
         
         class_acc = accuracy_score(y_true_drones_only, y_pred_drones_only)
-        print(f"\n2. Class Certainty Accuracy (When GT is Drone): {class_acc * 100:.2f}%")
+        line_cls = f"\n2. Class Certainty Accuracy (When GT is Drone): {class_acc * 100:.2f}%"
+        print(line_cls)
+        results_lines.append(line_cls)
     else:
-        print("\n2. Class Certainty Accuracy: N/A")
+        line_cls = "\n2. Class Certainty Accuracy: N/A"
+        print(line_cls)
+        results_lines.append(line_cls)
 
     # ============== CALCULATE RANGE-WISE METRICS ==============
-    print("\n" + "="*60)
+    header_range_1 = "\n" + "="*60
+    print(header_range_1)
     print("📊 RANGE-WISE PERFORMANCE")
     print("="*60)
-    print(f"{'Dist(m)':<8} | {'Pairs':<6} | {'Bin Acc':<8} | {'Cls Acc':<8} | {'Avg F':<6} | {'Avg G':<6}")
-    print("-" * 60)
+    header_range_2 = f"{'Dist(m)':<8} | {'Pairs':<6} | {'Bin Acc':<8} | {'Cls Acc':<8} | {'Avg F':<6} | {'Avg G':<6}"
+    sep_line = "-" * 60
+    print(header_range_2)
+    print(sep_line)
+
+    results_lines.append(header_range_1)
+    results_lines.append("📊 RANGE-WISE PERFORMANCE")
+    results_lines.append("="*60)
+    results_lines.append(header_range_2)
+    results_lines.append(sep_line)
     
     # Sort numeric distances first, then any "Unknown" strings at the end
     sorted_dists = sorted([d for d in range_metrics.keys() if isinstance(d, (int, float))])
@@ -220,18 +252,58 @@ def run_benchmark():
         avg_G = rm['sum_G'] / rm['total']
         
         dist_label = f"{dist}" if isinstance(dist, str) else f"{dist:.1f}"
-        print(f"{dist_label:<8} | {rm['total']:<6} | {bin_acc:6.2f}% | {cls_acc_str:<8} | {avg_F:5.3f} | {avg_G:5.3f}")
+        line_range = f"{dist_label:<8} | {rm['total']:<6} | {bin_acc:6.2f}% | {cls_acc_str:<8} | {avg_F:5.3f} | {avg_G:5.3f}"
+        print(line_range)
+        results_lines.append(line_range)
 
-    # ============== GENERATE ALL PLOTS ==============
-    print(f"\nGenerating plots for all {len(detailed_results)} pairs...")
+    # ============== SAVE RESULTS TO TXT ==============
+    os.makedirs(os.path.dirname(RESULTS_TXT_PATH), exist_ok=True)
+    with open(RESULTS_TXT_PATH, 'w') as f:
+        f.write("\n".join(results_lines))
+
+    print(f"\nBenchmark results written to: {RESULTS_TXT_PATH}")
+
+    # ============== GENERATE LIMITED PLOTS (K correct, K wrong) ==============
+    print(f"\nGenerating up to {K_EXAMPLES} correct and {K_EXAMPLES} wrong example plots...")
     os.makedirs(PLOT_SAVE_DIR, exist_ok=True)
-    
-    for idx, res in enumerate(detailed_results):
-        save_pair_plot(res, idx, PLOT_SAVE_DIR)
-        if (idx + 1) % 50 == 0:
-            print(f"Saved {idx + 1}/{len(detailed_results)} plots...")
 
-    print(f"\n✅ All plots saved successfully in the '{PLOT_SAVE_DIR}' directory.")
+    correct_examples = []
+    wrong_examples = []
+
+    for res in detailed_results:
+        gt_is_drone = res['gt_is_drone']
+        pred_is_drone = res['pred_is_drone']
+        gt_class = res['gt_class']
+        pred_class = res['pred_class']
+
+        # Use the same notion of correctness as in save_pair_plot
+        if gt_is_drone != pred_is_drone:
+            is_correct = False
+        elif pred_class == 'uncertain':
+            is_correct = False
+        elif gt_class != pred_class:
+            is_correct = False
+        else:
+            is_correct = True
+
+        if is_correct and len(correct_examples) < K_EXAMPLES:
+            correct_examples.append(res)
+        elif not is_correct and len(wrong_examples) < K_EXAMPLES:
+            wrong_examples.append(res)
+
+        if len(correct_examples) >= K_EXAMPLES and len(wrong_examples) >= K_EXAMPLES:
+            break
+
+    # Plot selected examples
+    idx = 0
+    for res in correct_examples:
+        save_pair_plot(res, idx, PLOT_SAVE_DIR)
+        idx += 1
+    for res in wrong_examples:
+        save_pair_plot(res, idx, PLOT_SAVE_DIR)
+        idx += 1
+
+    print(f"\n✅ Saved {len(correct_examples)} correct and {len(wrong_examples)} wrong example plots in '{PLOT_SAVE_DIR}'.")
 
 
 if __name__ == "__main__":
