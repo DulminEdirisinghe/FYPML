@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import torch
 from PIL import Image
 from sklearn.metrics import accuracy_score
@@ -10,19 +11,20 @@ from pipeline import load_all_models, CONFIG, logistic_fusion, run_yolo
 
 
 # ============== CONFIGURATIONS ==============
-FOLDER_A_TEST = 'data/data/v2/SCD_images/test'
-FOLDER_B_TEST = 'data/data/v2/YOLO/stationary/test'
+FOLDER_A_TEST = 'data/data/v3/SCD_images/test'
+FOLDER_B_TEST = 'data/data/v3/YOLO/stationary/test'
 
-OUTPUT_DIR = CONFIG['output_dir']
+OUTPUT_DIR = "runs/hparams_v3_data_v3_model"
 CACHE_FILENAME = 'fusion_cache.json'
 RESULTS_FILENAME = 'fusion_hparam_results.txt'
 
 # Search ranges for fusion hyperparameters
-W1_RANGE = [0.5, 1.0, 1.5]
-W2_RANGE = [0.5, 1.0, 1.5]
-B_RANGE = [-1.0, 0.0, 1.0]
-T1_RANGE = [0.4, 0.5, 0.6]
-T2_RANGE = [0.2, 0.3, 0.4]
+# Fine-tuning Search Ranges
+W1_RANGE = [0.3, 0.4, 0.5, 0.6, 0.7]
+W2_RANGE = [0.3, 0.4, 0.5, 0.6, 0.7]
+B_RANGE = [-0.5, -0.4, -0.3, -0.2, -0.1]
+T1_RANGE = [0.40, 0.45, 0.50, 0.55, 0.60]
+T2_RANGE = [0.05, 0.10, 0.15, 0.20, 0.25] # Expanded below previous minimum
 
 
 def run_inference_and_cache(cache_path):
@@ -46,10 +48,30 @@ def run_inference_and_cache(cache_path):
     for i in range(len(dataset)):
         data = dataset[i]
 
-        # Ground truth labels
-        gt_is_drone = data['gt_has_drone']
-        gt_class = data['gt_drone_class'] if gt_is_drone else 'no_drone'
-        dist = data.get('distance')
+        a_filename = os.path.basename(data['a_img_path']).lower()
+        b_filename = os.path.basename(data['b_img_path']).lower()
+
+        # 1. Extract Distance using Regex
+        dist_val = 0.0
+        dist_match = re.search(r'(\d+(?:\.\d+)?)m', a_filename)
+        if not dist_match:
+            dist_match = re.search(r'(\d+(?:\.\d+)?)m', b_filename)
+            
+        if dist_match:
+            dist_val = float(dist_match.group(1))
+            
+        dist_str = f"{dist_val:g}m"
+
+        # 2. Override Ground Truth based strictly on extracted distance
+        if dist_val == 0.0:
+            gt_is_drone = False
+            gt_class = 'no_drone'
+        else:
+            gt_is_drone = True
+            if 'phantom' in a_filename or 'phanthom' in a_filename:
+                gt_class = 'phantom'
+            else:
+                gt_class = 'phantom'
 
         # EfficientNet (P4)
         img_a = Image.open(data['a_img_path']).convert('RGB')
@@ -67,7 +89,7 @@ def run_inference_and_cache(cache_path):
         record = {
             'a_img_path': data['a_img_path'],
             'b_img_path': data['b_img_path'],
-            'distance': dist,
+            'distance': dist_str,
             'gt_is_drone': gt_is_drone,
             'gt_class': gt_class,
             'P4': P4,
@@ -89,13 +111,7 @@ def run_inference_and_cache(cache_path):
 
 
 def evaluate_current_config(records):
-    """Evaluate detection + class accuracy for current CONFIG fusion/thresholds.
-
-    - Binary accuracy: drone vs no-drone (same as before).
-    - Class accuracy: when GT has a drone, how often we output a confident
-      class decision ("DroneType"). This avoids string-matching issues
-      between label names (e.g. "phantom" vs "Phantom").
-    """
+    """Evaluate detection + class accuracy for current CONFIG fusion/thresholds."""
 
     y_true_binary = []
     y_pred_binary = []
@@ -113,21 +129,26 @@ def evaluate_current_config(records):
         # Decision logic matches pipeline.detect
         if G <= CONFIG['T1']:
             final_decision = 'NOdrone'
+            pred_class = 'no_drone'
         elif F > CONFIG['T2']:
             final_decision = 'DroneType'
+            pred_class = rec['yolo_class'].lower() if rec['yolo_class'] else 'uncertain'
         else:
             final_decision = 'Detected'
+            pred_class = 'uncertain'
 
         pred_is_drone = final_decision in ['Detected', 'DroneType']
 
         gt_is_drone = rec['gt_is_drone']
+        gt_class = rec['gt_class']
+        
         y_true_binary.append(gt_is_drone)
         y_pred_binary.append(pred_is_drone)
 
-        # Class "correct" means: GT has a drone and we output DroneType
+        # Class "correct" aligns with strict benchmark logic: specific drone class must match
         if gt_is_drone:
             cls_total += 1
-            if final_decision == 'DroneType':
+            if pred_is_drone and gt_class == pred_class:
                 cls_correct += 1
 
     # Overall binary accuracy (drone vs no-drone)
@@ -250,7 +271,7 @@ def main():
     results_path = os.path.join(OUTPUT_DIR, RESULTS_FILENAME)
 
     if os.path.exists(cache_path):
-        print(f"Loading cached inference from {cache_path}...")
+        print(f"Loading cached inference from {cache_path}...\n(Note: If dataset labels changed, delete {cache_path} to re-cache)")
         with open(cache_path, 'r') as f:
             records = json.load(f)
     else:

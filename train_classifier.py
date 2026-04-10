@@ -12,12 +12,12 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 # ============== CONFIG ==============
 CONFIG = {
-    'train_dir': 'data/data/old/effientnet_grapgh/train',
-    'test_dir': 'data/data/old/effientnet_grapgh/test',
-    'output_root': 'runs/scd_train_full_range',
+    'train_dir': 'data/data/v3/SCD_images/train',
+    'test_dir': 'data/data/v3/SCD_images/test',
+    'output_root': 'runs/efficientnet_v3',
     'batch_size': 32,
     'num_epochs': 50,
-    'patience': 5,            # Early stopping patience
+    'patience': 20,
     'learning_rate': 0.001,
     'model_name': 'efficientnet_b0'
 }
@@ -96,13 +96,6 @@ class CustomImageDataset(Dataset):
         if self.transform: image = self.transform(image)
         return image, self.labels[idx]
 
-def get_transforms():
-    return transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
 # ============== EVALUATION ENGINE ==============
 def run_evaluation(model, dataset, device):
     model.eval()
@@ -110,7 +103,6 @@ def run_evaluation(model, dataset, device):
     
     all_preds, all_labels = [], []
     
-    # Bins for summary
     bins = {
         "Drone 0-3m":  {"y_true": [], "y_pred": []},
         "Drone 4-10m": {"y_true": [], "y_pred": []},
@@ -132,7 +124,6 @@ def run_evaluation(model, dataset, device):
             all_preds.append(p)
             all_labels.append(l)
             
-            # Sort into bins
             if l == 0:
                 bins["No Drone"]["y_true"].append(l)
                 bins["No Drone"]["y_pred"].append(p)
@@ -149,32 +140,29 @@ def run_evaluation(model, dataset, device):
 
     def calculate_metrics(y_true, y_pred):
         if not y_true: return 0.0, 0.0, 0.0, 0.0
-        # For subset Accuracy, we compare directly. 
-        # For subset Precision/Recall, we use binary metrics relative to the original task.
         acc = accuracy_score(y_true, y_pred)
-        # Note: Precision/Recall on a single-class slice can be tricky. 
-        # We use 'macro' or 'binary' with zero_division handling to ensure the report stays clean.
-        prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='macro', zero_division=1)
+        # Using macro to handle single-class slices effectively for the summary
+        prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='macro', zero_division=0)
         return acc, prec, rec, f1
 
-    # Overall Metrics
+    # Global Overall Metrics (Binary for the specific target)
     o_prec, o_rec, o_f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='binary', zero_division=0)
     o_acc = accuracy_score(all_labels, all_preds)
 
     report = [
-        "="*85,
+        "="*100,
         f"FINAL PERFORMANCE SUMMARY - {TIMESTAMP}",
-        "="*85,
+        "="*100,
         f"OVERALL SYSTEM PERFORMANCE:",
-        f"  Accuracy:  {o_acc*100:.2f}% | Precision: {o_prec:.4f} | Recall: {o_rec:.4f} | F1: {o_f1:.4f}",
-        "\n" + "-"*85,
-        f"{'Category':<15} | {'Samples':<8} | {'Accuracy':<12} | {'F1-Score':<10}",
-        "-"*85
+        f"  Accuracy: {o_acc*100:.2f}% | Precision: {o_prec:.4f} | Recall: {o_rec:.4f} | F1: {o_f1:.4f}",
+        "\n" + "-"*100,
+        f"{'Category':<15} | {'Samples':<8} | {'Acc (%)':<10} | {'Prec':<10} | {'Rec':<10} | {'F1-Score':<10}",
+        "-"*100
     ]
 
     for cat_name, data in bins.items():
-        acc, _, _, f1 = calculate_metrics(data['y_true'], data['y_pred'])
-        report.append(f"{cat_name:<15} | {len(data['y_true']):<8} | {acc*100:<10.2f}% | {f1:<10.3f}")
+        acc, prec, rec, f1 = calculate_metrics(data['y_true'], data['y_pred'])
+        report.append(f"{cat_name:<15} | {len(data['y_true']):<8} | {acc*100:<10.2f} | {prec:<10.3f} | {rec:<10.3f} | {f1:<10.3f}")
 
     report_str = "\n".join(report)
     print(report_str)
@@ -204,7 +192,6 @@ def train_model(model, train_loader, val_loader, device):
             _, pred = torch.max(outputs, 1)
             total += lbls.size(0); correct += (pred == lbls).sum().item()
 
-        # Validation
         model.eval()
         val_correct, val_total = 0, 0
         with torch.no_grad():
@@ -222,7 +209,6 @@ def train_model(model, train_loader, val_loader, device):
             torch.save(model.state_dict(), CHECKPOINT_PATH)
             logger.info(f"Model Improved. Checkpoint saved.")
 
-        # Early Stopping check
         early_stopping(val_acc)
         if early_stopping.early_stop:
             logger.info(f"Early stopping triggered at epoch {epoch+1}.")
@@ -230,9 +216,12 @@ def train_model(model, train_loader, val_loader, device):
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # transform = get_transforms()
+    
+    # Using standardized ImageNet normalization if using pretrained weights
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),transforms.ToTensor(),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     train_set = CustomImageDataset(CONFIG['train_dir'], transform=transform)
@@ -241,7 +230,7 @@ def main():
     train_loader = DataLoader(train_set, batch_size=CONFIG['batch_size'], shuffle=True)
     val_loader = DataLoader(test_set, batch_size=CONFIG['batch_size'], shuffle=False)
 
-    model = getattr(models, CONFIG['model_name'])(pretrained=True)
+    model = getattr(models, CONFIG['model_name'])(weights='DEFAULT')
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, 2)
     model = model.to(device)
     
