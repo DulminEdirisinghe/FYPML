@@ -21,7 +21,7 @@ def save_benchmark_plot(res, idx, save_dir):
     pred_cid = res['pred_cid']
     is_correct = res['is_correct']
     
-    name_map = {-1: "Background", 0: "Phantom", 1: "Matrice", 2: "Mavic", 4: "Uncertain"}
+    name_map = {-1: "Background", 0: "Phantom", 1: "Matrice", 2: "Mavic"}
     
     # Determine error category for naming
     if is_correct:
@@ -30,7 +30,7 @@ def save_benchmark_plot(res, idx, save_dir):
     elif gt_cid in [0, 1, 2] and pred_cid is None:
         category = "missed_drone" # FN
         color = "red"
-    elif gt_cid in [-1, 4] and pred_cid is not None:
+    elif gt_cid == -1 and pred_cid is not None:
         category = "false_alarm" # FP
         color = "red"
     else:
@@ -70,7 +70,7 @@ def run_bench():
 
     range_stats = {}
     class_stats = {-1: {'c': 0, 't': 0}, 0: {'c': 0, 't': 0}, 
-                    1: {'c': 0, 't': 0}, 2: {'c': 0, 't': 0}, 4: {'c': 0, 't': 0}}
+                    1: {'c': 0, 't': 0}, 2: {'c': 0, 't': 0}}
     
     detailed_results = []
 
@@ -89,8 +89,8 @@ def run_bench():
                 pred_cid = best_det['class_id']
 
         is_correct = False
-        # Logic: -1 and 4 must be silent
-        if gt_cid in [-1, 4]:
+        # Logic: -1 must be silent
+        if gt_cid == -1:
             if max_conf < CONF_THRESH:
                 is_correct = True
         else:
@@ -124,7 +124,7 @@ def run_bench():
 
     # (Class table code here...)
     print("\n" + "═"*50 + "\nCLASS-WISE ACCURACY\n" + "─"*50)
-    name_map = {-1: "Background", 0: "Phantom", 1: "Matrice", 2: "Mavic", 4: "Uncertain"}
+    name_map = {-1: "Background", 0: "Phantom", 1: "Matrice", 2: "Mavic"}
     for cid in sorted(class_stats.keys()):
         s = class_stats[cid]
         if s['t'] == 0: continue

@@ -10,7 +10,7 @@ class DronePairDataset(Dataset):
         self.folder_b_images = os.path.join(folder_b, 'images')
         self.folder_b_labels = os.path.join(folder_b, 'labels')
         
-        # Mapping: Phanthom=0, MATRICE4=1, MAVIC3=2, Uncertain=4, Background=-1
+        # Mapping: Phanthom=0, MATRICE4=1, MAVIC3=2, Background=-1
         self.class_map = {0: 'Phanthom', 1: 'MATRICE4', 2: 'MAVIC3'}
         
         self.pairs = []
@@ -69,14 +69,10 @@ class DronePairDataset(Dataset):
                 a_path = random.choice(scd_no_drone)
             else:
                 # Drone Case
-                if not os.path.exists(label_path) or os.path.getsize(label_path) == 0:
-                    class_id = 4 # Uncertain
-                    class_name = self._extract_class_yolo_fn(basename)
-                else:
-                    with open(label_path, 'r') as f:
-                        line = f.readline().strip()
-                        class_id = int(line.split()[0])
-                        class_name = self.class_map[class_id]
+                class_name = self._extract_class_yolo_fn(basename)
+                if class_name == 'Phanthom': class_id = 0
+                elif class_name == 'MATRICE4': class_id = 1
+                elif class_name == 'MAVIC3': class_id = 2
 
                 # Match by distance and class
                 key = (float(dist), class_name)
@@ -114,7 +110,7 @@ class DronePairDataset(Dataset):
             print(f"  {d}m: {dist_stats[d]} images")
             
         print("\nClass Wise (ID):")
-        class_names = {-1:'Background', 0:'Phantom', 1:'Matrice', 2:'Mavic', 4:'Uncertain'}
+        class_names = {-1:'Background', 0:'Phantom', 1:'Matrice', 2:'Mavic'}
         for cid in sorted(class_stats.keys()):
             print(f"  Class {cid} ({class_names[cid]}): {class_stats[cid]} images")
 
