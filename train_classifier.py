@@ -1,3 +1,5 @@
+from collections import Counter
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -12,9 +14,9 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 # ============== CONFIG ==============
 CONFIG = {
-    'train_dir': 'data/data/v3/SCD_images/train',
-    'test_dir': 'data/data/v3/SCD_images/test',
-    'output_root': 'runs/efficientnet_v3',
+    'train_dir': 'data/v5/SCD_images/train',
+    'test_dir': 'data/v5/SCD_images/test',
+    'output_root': 'runs/efficientnet_v5_classification',
     'batch_size': 32,
     'num_epochs': 50,
     'patience': 20,
@@ -81,13 +83,28 @@ class CustomImageDataset(Dataset):
                 img_path = os.path.join(root_dir, file_name)
                 name_parts = os.path.splitext(file_name)[0].split('_')
                 
-                label = 0 if 'NO' in name_parts else 1
+                if 'NO' in name_parts or 'NO_DRONE' in file_name:
+                    label = 0
+                elif 'Phanthom' in file_name:
+                    label = 1
+                elif 'MATRICE4' in file_name:
+                    label = 2
+                elif 'MAVIC3' in file_name:
+                    label = 3
+                else:
+                    label = 0
+                    
                 dist_match = dist_pattern.search(file_name)
                 distance = float(dist_match.group(1)) if dist_match else 0.0
                 
                 self.images.append(img_path)
                 self.labels.append(label)
                 self.distances.append(distance)
+
+                # print data stats
+        print(f"Dataset initialized with {len(self.images)} samples.")
+        print(f"Label distribution: {Counter(self.labels)}")
+        
 
     def __len__(self): return len(self.images)
     
@@ -145,8 +162,8 @@ def run_evaluation(model, dataset, device):
         prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='macro', zero_division=0)
         return acc, prec, rec, f1
 
-    # Global Overall Metrics (Binary for the specific target)
-    o_prec, o_rec, o_f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='binary', zero_division=0)
+    # Global Overall Metrics (Macro for multi-class targets)
+    o_prec, o_rec, o_f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='macro', zero_division=0)
     o_acc = accuracy_score(all_labels, all_preds)
 
     report = [
@@ -231,7 +248,7 @@ def main():
     val_loader = DataLoader(test_set, batch_size=CONFIG['batch_size'], shuffle=False)
 
     model = getattr(models, CONFIG['model_name'])(weights='DEFAULT')
-    model.classifier[1] = nn.Linear(model.classifier[1].in_features, 2)
+    model.classifier[1] = nn.Linear(model.classifier[1].in_features, 4)
     model = model.to(device)
     
     train_model(model, train_loader, val_loader, device)
