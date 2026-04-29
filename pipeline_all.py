@@ -56,7 +56,7 @@ CONFIG = {
 
     # Fusion thresholds
     'T1': 0.4,
-    'T2': 0.05,
+    'T2': 0.7,
 
     'fusion_w1': 0.3,
     'fusion_w2': 0.7,
