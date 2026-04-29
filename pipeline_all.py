@@ -1,0 +1,353 @@
+
+"""
+Unified Detector Backend
+EfficientNet -> binary drone/no_drone
+YOLO -> 3 drone classes: phantom, matrice, mavic
+Fusion -> final decision
+"""
+
+import os
+import logging
+from datetime import datetime
+import time
+import glob
+
+import torch
+import torch.nn as nn
+from PIL import Image
+from torchvision import transforms, models
+from ultralytics import YOLO
+from ultralytics.nn.tasks import DetectionModel
+
+
+# ============== LOGGER ==============
+def setup_logger():
+    log_filename = 'classifier_detection.log'
+    logger = logging.getLogger('EfficientNetDetector')
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+        file_handler = logging.FileHandler(log_filename, mode='a')
+        console_handler = logging.StreamHandler()
+
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+
+    return logger
+
+
+logger = setup_logger()
+
+
+# ============== CONFIG ==============
+CONFIG = {
+    # EfficientNet binary model trained with no_drone vs drone
+    'classifier_model_path': 'runs/efficientnet_correct_full_range_3drones/20260428_141142/best_classifier.pth',
+    'classifier_model_name': 'efficientnet_b0',
+    'num_classes': 2,
+    'class_names': ['no_drone', 'drone'],
+
+    # Fusion thresholds
+    'T1': 0.4,
+    'T2': 0.05,
+
+    'fusion_w1': 0.3,
+    'fusion_w2': 0.7,
+    'fusion_b': -0.5,
+
+    # YOLO 3-class model
+    'yolo_model_yaml': 'ultralytics/cfg/models/11/yolo11.yaml',
+    'yolo_weights_path': 'weights/v5/phase1_cv3_model.pt',
+    'yolo_imgsz': 640,
+    'yolo_device': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'yolo_nc': 3,
+    'yolo_class_names': ['Phantom', 'Matrice', 'Mavic'],
+
+    'output_dir': 'outputs',
+
+    # Streaming folders
+    'stream_folder_a': 'runs/folder_a',
+    'stream_folder_b': 'runs/folder_b',
+    'poll_interval': 5
+}
+
+
+def get_transforms():
+    return transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+
+
+def load_model(device):
+    model = getattr(models, CONFIG['classifier_model_name'])(weights='DEFAULT')
+
+    model.classifier[1] = nn.Linear(
+        model.classifier[1].in_features,
+        CONFIG['num_classes']
+    )
+
+    model.load_state_dict(
+        torch.load(CONFIG['classifier_model_path'], map_location=device)
+    )
+
+    model = model.to(device)
+    model.eval()
+
+    return model
+
+
+def load_yolo_model():
+    yolo = YOLO(CONFIG['yolo_model_yaml'])
+
+    yolo.model = DetectionModel(
+        CONFIG['yolo_model_yaml'],
+        nc=CONFIG['yolo_nc']
+    )
+
+    state_dict = torch.load(
+        CONFIG['yolo_weights_path'],
+        map_location='cpu'
+    )
+
+    yolo.model.load_state_dict(state_dict)
+    yolo.model.to(CONFIG['yolo_device'])
+    yolo.model.eval()
+
+    return yolo
+
+
+def logistic_fusion(F, P4):
+    z = CONFIG['fusion_w1'] * F + CONFIG['fusion_w2'] * P4 + CONFIG['fusion_b']
+    G = 1.0 / (1.0 + torch.exp(torch.tensor(-z, dtype=torch.float32)))
+    return float(G)
+
+
+def read_image(image_path):
+    return Image.open(image_path).convert('RGB')
+
+
+def run_yolo(image_path, yolo_model):
+    results = yolo_model.predict(
+        source=image_path,
+        imgsz=CONFIG['yolo_imgsz'],
+        device=CONFIG['yolo_device'],
+        verbose=False
+    )
+
+    detections = []
+    max_conf = 0.0
+    best_class_name = None
+
+    os.makedirs(CONFIG['output_dir'], exist_ok=True)
+
+    base_name = os.path.basename(image_path).split('.')[0]
+    save_path = os.path.join(CONFIG['output_dir'], f"{base_name}_detected.jpg")
+
+    for r in results:
+        for box in r.boxes:
+            conf = float(box.conf[0])
+            class_id = int(box.cls[0])
+
+            if class_id < len(CONFIG['yolo_class_names']):
+                class_name = CONFIG['yolo_class_names'][class_id]
+            else:
+                class_name = f"class_{class_id}"
+
+            detections.append({
+                'bbox': box.xyxy[0].tolist(),
+                'confidence': conf,
+                'class_id': class_id,
+                'class_name': class_name
+            })
+
+            if conf > max_conf:
+                max_conf = conf
+                best_class_name = class_name
+
+        plotted_img = r.plot()
+        Image.fromarray(plotted_img[..., ::-1]).save(save_path)
+
+    return {
+        'detections': detections,
+        'num_detections': len(detections),
+        'max_confidence': max_conf,
+        'best_class_name': best_class_name,
+        'saved_detection_image': save_path
+    }
+
+
+def detect(image_path_a, image_path_b, classifier, yolo_model, transform, device):
+    # EfficientNet binary classification
+    image = read_image(image_path_a)
+    image_tensor = transform(image).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        output = classifier(image_tensor)
+        probabilities = torch.softmax(output, dim=1)
+
+    # P4 = drone probability from EfficientNet
+    P4 = probabilities[0, 1].item()
+
+    # YOLO multi-class detection
+    yolo_result = run_yolo(image_path_b, yolo_model)
+
+    # F = highest YOLO confidence among phantom/matrice/mavic
+    F = yolo_result['max_confidence']
+
+    logger.info(
+        f"Model Scores - EfficientNet (P4): {P4:.4f}, YOLO (F): {F:.4f}"
+    )
+
+    G = logistic_fusion(F, P4)
+
+    base_result = {
+        'P4': P4,
+        'F': F,
+        'G': G,
+        'num_detections': yolo_result['num_detections'],
+        'saved_detection_image': yolo_result['saved_detection_image'],
+        'detections': yolo_result['detections']
+    }
+
+    if G <= CONFIG['T1']:
+        return {
+            **base_result,
+            'final_decision': 'NOdrone',
+            'drone_type': None,
+            'status_message': 'No Drone Detected'
+        }
+
+    if F > CONFIG['T2']:
+        return {
+            **base_result,
+            'final_decision': 'DroneType',
+            'drone_type': yolo_result['best_class_name'],
+            'status_message': f"Drone Detected: {yolo_result['best_class_name']}"
+        }
+
+    return {
+        **base_result,
+        'final_decision': 'Detected',
+        'drone_type': None,
+        'status_message': 'Drone Detected But Type Uncertain'
+    }
+
+
+def load_all_models():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    classifier = load_model(device)
+    yolo_model = load_yolo_model()
+    transform = get_transforms()
+
+    return classifier, yolo_model, transform, device
+
+
+def get_latest_file(folder_path):
+    list_of_files = glob.glob(os.path.join(folder_path, '*'))
+
+    image_files = [
+        f for f in list_of_files
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    ]
+
+    if not image_files:
+        return None
+
+    return max(image_files, key=os.path.getctime)
+
+
+def main():
+    logger.info("Loading models...")
+
+    classifier, yolo_model, transform, device = load_all_models()
+
+    print("Models loaded successfully. Starting real-time folder monitoring...")
+
+    os.makedirs(CONFIG['stream_folder_a'], exist_ok=True)
+    os.makedirs(CONFIG['stream_folder_b'], exist_ok=True)
+
+    last_processed_time_a = None
+    last_processed_time_b = None
+
+    try:
+        while True:
+            latest_image_a = get_latest_file(CONFIG['stream_folder_a'])
+            latest_image_b = get_latest_file(CONFIG['stream_folder_b'])
+
+            if latest_image_a and latest_image_b:
+                time_a = os.path.getctime(latest_image_a)
+                time_b = os.path.getctime(latest_image_b)
+
+                has_update_a = last_processed_time_a is None or time_a > last_processed_time_a
+                has_update_b = last_processed_time_b is None or time_b > last_processed_time_b
+
+                if has_update_a and has_update_b:
+                    time.sleep(0.1)
+
+                    try:
+                        filename_a = os.path.basename(latest_image_a)
+                        filename_b = os.path.basename(latest_image_b)
+
+                        logger.info("Processing new pair")
+                        logger.info(f"Folder A image: {latest_image_a} timestamp: {time_a}")
+                        logger.info(f"Folder B image: {latest_image_b} timestamp: {time_b}")
+
+                        result = detect(
+                            latest_image_a,
+                            latest_image_b,
+                            classifier,
+                            yolo_model,
+                            transform,
+                            device
+                        )
+
+                        print("\n" + "=" * 60)
+                        print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        print(f"Folder A: {filename_a}")
+                        print(f"Folder B: {filename_b}")
+                        print(f"EfficientNet P4: {result['P4']:.4f}")
+                        print(f"YOLO F: {result['F']:.4f}")
+                        print(f"Fusion Score G: {result['G']:.4f}")
+                        print(f"Number of YOLO detections: {result['num_detections']}")
+                        print(f"Decision: {result['status_message']}")
+                        print("=" * 60 + "\n")
+
+                        last_processed_time_a = time_a
+                        last_processed_time_b = time_b
+
+                    except Exception as e:
+                        logger.error(f"Failed to process image pair: {e}")
+
+                else:
+                    logger.info(
+                        f"NO update in 5s - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+
+            else:
+                if not latest_image_a:
+                    logger.warning("No images found in Folder A")
+
+                if not latest_image_b:
+                    logger.warning("No images found in Folder B")
+
+            time.sleep(CONFIG['poll_interval'])
+
+    except KeyboardInterrupt:
+        logger.info("Real-time monitoring stopped by user.")
+
+
+if __name__ == "__main__":
+    main()
