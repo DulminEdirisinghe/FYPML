@@ -45,7 +45,7 @@ logger = setup_logger()
 
 # ============== CONFIG ==============
 CONFIG = {
-    'classifier_model_path': 'runs/efficientnet_v3/20260411_040900/best_classifier.pth',
+    'classifier_model_path': 'FYPML/weights/final_demo/best_classifier.pth',
     'classifier_model_name': 'efficientnet_b0',
     'num_classes': 2,
     'class_names': ['no_drone', 'drone'],
@@ -62,7 +62,7 @@ CONFIG = {
     
 
     'yolo_model_yaml': 'ultralytics/cfg/models/11/yolo11.yaml',
-    'yolo_weights_path': 'weights/v3/phase1_cv3_model.pt',
+    'yolo_weights_path': 'FYPML/weights/final_demo/phase1_cv3_model.pt',
     'yolo_imgsz': 640,
     'yolo_device': 'cuda',
     'yolo_nc': 1,

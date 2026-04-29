@@ -21,10 +21,11 @@
 # val: /home/dulmin/FYPML/data/data/v2/YOLO/stationary/test/images
 # test: /home/dulmin/FYPML/data/data/v2/YOLO/stationary/test/images
 
-train: /home/dulmin/FYPML/data/data/v2/YOLO/combned/train/images
-val: /home/dulmin/FYPML/data/data/v2/YOLO/combned/test/images
-test: /home/dulmin/FYPML/data/data/v2/YOLO/combned/test/images
+train: /home/dulmin/FYPML/data/v5/YOLO/combined/train/images
+val:  /home/dulmin/FYPML/data/v5/YOLO/combined/test/images
+test: /home/dulmin/FYPML/data/v5/YOLO/combined/test/images
 
 
-nc: 1
-names: ['phantom']
+nc: 3
+names: ['phantom', 'matrice', 'mavic']
+
