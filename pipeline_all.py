@@ -49,16 +49,16 @@ logger = setup_logger()
 # ============== CONFIG ==============
 CONFIG = {
     # EfficientNet binary model trained with no_drone vs drone
-    'classifier_model_path': 'runs/efficientnet_correct_full_range_3drones/20260428_141142/best_classifier.pth',
+    'classifier_model_path': 'runs/efficientnet_v9/20260430_051825/best_classifier.pth',
     'classifier_model_name': 'efficientnet_b0',
     'num_classes': 2,
     'class_names': ['no_drone', 'drone'],
 
     # Fusion thresholds
-    'T1': 0.4,
+    'T1': 0.5,
     'T2': 0.7,
 
-    'fusion_w1': 0.3,
+    'fusion_w1': 0.1,
     'fusion_w2': 0.7,
     'fusion_b': -0.5,
 
