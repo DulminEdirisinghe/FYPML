@@ -1,0 +1,7 @@
+train: /home/dulmin/FYPML/data/v5/YOLO/stationary/train/images
+val:  /home/dulmin/FYPML/data/v5/YOLO/stationary/test/images
+test: /home/dulmin/FYPML/data/v5/YOLO/stationary/test/images
+
+
+nc: 3
+names: ['phantom', 'matrice', 'mavic']

@@ -1,0 +1,512 @@
+\documentclass[11pt, letterpaper, oneside, openany]{book}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath, amssymb, amsthm, amsfonts}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{shapes, arrows.meta, positioning, fit, backgrounds, decorations.pathreplacing, calc, neuralnetwork}
+\geometry{left=25mm, right=25mm, top=30mm, bottom=30mm}
+\setstretch{1.25}
+
+% Code formatting settings
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+% Math operators
+\DeclareMathOperator{\softmax}{softmax}
+\DeclareMathOperator{\ReLU}{ReLU}
+\DeclareMathOperator{\Swish}{Swish}
+\DeclareMathOperator{\Sigmoid}{\sigma}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancy head[LE, RO]{\thepage}
+\fancyhead[RE]{\leftmark}
+\fancyhead[LO]{\rightmark}
+
+\title{
+    \vspace{2cm}
+    \Huge \textbf{Deep Mathematical and Systems Architecture of the Multimodal Drone Detection Pipeline} \\
+    \Large \textbf{A Mixture of Experts \& Early-Late Fusion Approach} \\
+    \vspace{1cm}
+}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+
+% ==============================================================================
+\chapter{Asynchronous Telemetry and Payload Ingestion (\texttt{mqtt.py})}
+
+\section{MQTT Protocol Thermodynamics and Network Overhead}
+The data acquisition layer relies on the Message Queuing Telemetry Transport (MQTT) protocol, operating at the Application Layer of the OSI model, layered directly above TCP/IP. The script connects to \texttt{broker.emqx.io} via port 1883 (unencrypted).
+
+In standard operational parameters, visual frames are published with a Quality of Service (QoS) value of $0$. Under QoS 0, the publish mechanism operates under a "fire-and-forget" paradigm. Let $P(E)$ denote the probability of packet loss. Under QoS 0, the expected delivery latency $L_{expected}$ is minimized as there is no PUBACK (Publish Acknowledgment) packet required from the broker, resulting in:
+\begin{equation}
+    L_{expected} = \frac{RTT}{2} + \tau_{proc}
+\end{equation}
+Where $RTT$ is the Round Trip Time to the EMQX broker, and $\tau_{proc}$ is the internal processing time of the MQTT daemon.
+
+\section{Payload Decoding and Matrix Reconstruction}
+The optical sensors transmit payload data configured as Base64 strings. Base64 encoding utilizes 6 bits per character, meaning an arbitrary binary dataset of $N$ bytes experiences an expansion factor of:
+\begin{equation}
+    N_{encoded} = \left\lceil \frac{N}{3} \right\rceil \times 4
+\end{equation}
+This induces an approximate $33.3\%$ bandwidth overhead but ensures binary-safe transmission across the MQTT payload buffers.
+
+Upon triggering the \texttt{on\_message} callback, the system intercepts the \texttt{msg.payload}. The reconstruction to an $H \times W \times C$ spatial tensor requires sequential unspooling:
+\begin{lstlisting}[language=Python, caption=Buffer Instantiation and Memory Allocation]
+img_bytes = base64.b64decode(msg.payload)
+np_arr = np.frombuffer(img_bytes, np.uint8)
+img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+\end{lstlisting}
+
+\subsection{Memory Contiguity in NumPy and OpenCV}
+When \texttt{np.frombuffer} allocates the pointer, it natively invokes a C-contiguous array in RAM. OpenCV's \texttt{imdecode} function maps these contiguous memory blocks into a dynamically sized $N$-dimensional array matrix representing the image. Since \texttt{cv2.IMREAD\_COLOR} is flagged, the resulting matrix $I \in \mathbb{R}^{H \times W \times 3}$ is formulated in the BGR (Blue, Green, Red) channel interleaving format.
+
+% ==============================================================================
+\chapter{Concurrent State Machine and Streamlit UI (\texttt{app.py})}
+
+\section{Bypassing Linear DAG Execution in Streamlit}
+Streamlit natively operates via a Top-Down execution model. Any state mutation instigates a full re-evaluation of the Abstract Syntax Tree (AST). To orchestrate a continuously polling surveillance dashboard without hard-locking the Python Global Interpreter Lock (GIL), the architecture injects \texttt{st\_autorefresh}, effectively simulating an asynchronous loop bound to a configurable temporal interval, defined $T_{poll} \approx 2000$ milliseconds.
+
+\section{Filesystem Polling and Race Conditions}
+The core loop, \texttt{process\_latest\_stream\_pair()}, executes a stateless check against the filesystem inodes. 
+
+\begin{lstlisting}[language=Python, caption=Timestamp Deterministic Polling]
+def get_latest_file(folder_path):
+    list_of_files = glob.glob(os.path.join(folder_path, '*'))
+    if not list_of_files: return None
+    return max(list_of_files, key=os.path.getctime)
+\end{lstlisting}
+
+The system maps a continuous function against the localized inode tables computing $\max(\mathcal{T}_{ctime})$. Given a continuous high-frequency write scenario from \texttt{mqtt.py}, race conditions are mathematically inevitable when reading $I \subset \mathcal{F}$ precisely while I/O operations from \texttt{cv2.imwrite} are yielding to the filesystem buffer.
+
+To mitigate this, a temporal halting function is invoked:
+\begin{equation}
+    \tau_{sleep} \sim \mathcal{O}(0.1 \text{s})
+\end{equation}
+This $0.1s$ boundary represents the upper-bound flush limit for SSDs writing a standard $640 \times 640$ matrix, ensuring no \texttt{Image.open} call intercepts a truncated file header.
+
+% ==============================================================================
+\chapter{Latent Space Feature Extraction: EfficientNet Classifier}
+
+\section{EfficientNet-B0 Matrix Operations}
+The inference pipeline initiates parallel asynchronous calls. The first subsystem handles macroscopic classification via the EfficientNet-B0 architecture.
+
+EfficientNet optimizes accuracy and computational limits using the compound scaling method. Let the convolutional network be defined as a function $\mathcal{N} = \bigodot_{i=1 \dots k} \mathcal{F}_i(X)$. EfficientNet optimizes depth ($d$), width ($w$), and resolution ($r$) such that:
+\begin{align}
+    depth: d &= \alpha^\phi \\
+    width: w &= \beta^\phi \\
+    resolution: r &= \gamma^\phi \\
+    \text{s.t.} \quad \alpha \cdot \beta^2 \cdot \gamma^2 &\approx 2 \quad \text{and} \quad \alpha, \beta, \gamma \geq 1
+\end{align}
+
+\subsection{Data Normalization}
+Input tensors are strictly bound to ImageNet distributions. For a given pixel $x_{i,j}^c$ in channel $c$:
+\begin{equation}
+    x_{norm}^{c} = \frac{x_{i,j}^c - \mu_c}{\sigma_c}
+\end{equation}
+Where $\mu = [0.485, 0.456, 0.406]$ and $\sigma = [0.229, 0.224, 0.225]$. This maps the zero-mean Gaussian optimization bounds required by the network's Batch Normalization (BatchNorm2d) layers.
+
+\section{Classification Sub-head and Probability Extraction}
+The raw outputs of the EfficientNet logits, denoted $z \in \mathbb{R}^2$, are compressed into normalized probabilistic bounds using the Softmax function mapping over dimension $k \in \{0, 1\}$ (where 0 corresponds to \texttt{no\_drone} and 1 corresponds to \texttt{drone}).
+
+\begin{equation}
+    P_4 = \softmax(z)_1 = \frac{e^{z_1}}{e^{z_0} + e^{z_1}}
+\end{equation}
+
+This calculation executes under PyTorch's \texttt{torch.no\_grad()} context manager. By disabling autograd tracking, PyTorch bypasses the allocation of the directed acyclic graph (DAG) mapping required for backward propagation, thereby diminishing operational VRAM requirements by over 40\%.
+
+% ==============================================================================
+\chapter{Mixture of Experts Structure within YOLO11 Architectures}
+
+\section{Limitations of Singular Dense Matrices}
+Typical YOLO (You Only Look Once) networks optimize a global bounding box problem by defining spatial grids $S \times S$ and predicting conditional class probabilities. Let typical dense predictions be bounded by the loss scalar $\mathcal{L}_{YOLO}$. 
+
+When tracking drone entities, stationary drones invoke phenomenological edge structures distinctly different from moving targets subject to high-frequency motion blur. A standard singular weight space $\theta$ struggles to optimize $\mathcal{L}_{YOLO}$ globally without collapsing into sub-optimal local minima. 
+
+\section{Dynamically Gated MoE Networks}
+In \texttt{run\_train.py} and manipulated inside \texttt{ultralytics.nn.tasks}, the terminal detection head invokes a \textit{Mixture of Experts} (MoE). 
+
+Instead of terminating a deep feature vector $x \in \mathbb{R}^{d}$ directly into the decoupled bounding box and classification layers, the vector is routed via a Gating Matrix $W_g \in \mathbb{R}^{E \times d}$, where $E=2$ (Expert 1 and Expert 2).
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[
+        box/.style={draw, fill=white, minimum width=3cm, minimum height=1cm, align=center, thick},
+        arrow/.style={-Latex, thick},
+        scale=1, transform shape
+    ]
+        \node[box, fill=gray!20] (input) {$x$ Feature Token};
+        
+        \node[box, fill=orange!10, below=1.5cm of input] (gate) {Gating Matrix\\ $g(x) = \softmax(x W_g)$};
+        
+        \node[box, fill=red!10, below=2cm of gate, xshift=-4cm] (exp1) {Stationary Expert \\ $\mathcal{E}_1(x ; \theta_1)$};
+        \node[box, fill=blue!10, below=2cm of gate, xshift=4cm] (exp2) {Moving Expert \\ $\mathcal{E}_2(x ; \theta_2)$};
+        
+        \node[box, fill=green!10, below=3cm of gate] (sum) {$\sum_{i=1}^E g_i(x) \mathcal{E}_i(x)$};
+        
+        \draw[arrow] (input) -- (gate);
+        \draw[arrow] (input) -| (exp1);
+        \draw[arrow] (input) -| (exp2);
+        
+        \draw[arrow, dashed] (gate) -- node[left, xshift=-0.2cm, yshift=0.2cm] {$g_1(x)$} (exp1);
+        \draw[arrow, dashed] (gate) -- node[right, xshift=0.2cm, yshift=0.2cm] {$g_2(x)$} (exp2);
+        
+        \draw[arrow] (exp1) |- (sum);
+        \draw[arrow] (exp2) |- (sum);
+        
+    \end{tikzpicture}
+    \caption{MoE Spatial Routing Topology within Custom YOLO11 Head}
+\end{figure}
+
+The gating function outputs a set of probabilities $g_i(x)$ determining the percentage coefficient of participation for Expert $i$. 
+\begin{equation}
+    g_i(x) = \frac{\exp(x \cdot W_{g, i})}{\sum_{j=1}^{E} \exp(x \cdot W_{g, j})}
+\end{equation}
+The final representation $y$ yielded to the bounding box decoder becomes:
+\begin{equation}
+    y = g_1(x)\mathcal{E}_1(x) + g_2(x)\mathcal{E}_2(x)
+\end{equation}
+
+This allows the network to automatically and dynamically attribute higher weight to \texttt{stationary\_expert\_cv3\_weights.pt} if the latent space signature implies stationary physics.
+
+% ==============================================================================
+\chapter{Decoupled Gradient Descent Optimization (Two-Phase Model)}
+
+\section{Phase 1: Gating Stabilization (Frozen Sub-Tensors)}
+The initialization script \texttt{run\_train.py} invokes a strict freeze on the underlying tensor blocks governing the expert matrices.
+
+\begin{lstlisting}[language=Python, caption=Gradient Decoupling Logic]
+if phase == 1:
+    for expert in [detect_layer.experts1, detect_layer.experts2]:
+        for p in expert.parameters():
+            p.requires_grad = False
+\end{lstlisting}
+
+From a calculus perspective, let the total loss be $\mathcal{L}_{MoE}$. Backpropagating the loss through the MoE layer towards the input yields:
+\begin{equation}
+    \frac{\partial \mathcal{L}}{\partial \theta_i} = \frac{\partial \mathcal{L}}{\partial y} g_i(x) \frac{\partial \mathcal{E}_i(x; \theta_i)}{\partial \theta_i}
+\end{equation}
+By setting `requires_grad = False`, we explicitly set $\frac{\partial \mathcal{E}_i(x; \theta_i)}{\partial \theta_i} = 0$. Therefore, only the weight matrix governing the gating distribution $W_{g,i}$ is subjected to the optimizer's momentum adjustments:
+\begin{equation}
+    \delta W_{g,i} = -\alpha \frac{\partial \mathcal{L}}{\partial W_{g,i}}
+\end{equation}
+This isolates the parameter space, strictly training the routing mechanisms to learn visual discrepancies without polluting the precisely calibrated internal filters of Expert 1 and Expert 2.
+
+\section{Phase 2: Global Fine-Tuning Optimization}
+Post 100 epochs, Model State Dicts are serialized to \texttt{phase1\_cv3\_model.pt}, establishing the checkpoint. Phase 2 reactivates the analytical derivations of the network by unfreezing bounding dependencies. 
+
+During Phase 2, both the routing gradient $\nabla W_g$ and the expert gradients $\nabla \theta_i$ update concurrently. To prevent catastrophic forgetting phenomena historically observed in deep MoE clusters, Phase 2 is strictly clamped to an iteration length of exactly 3 Epochs.
+
+\begin{lstlisting}[language=Python, caption=Force Unfreezing Phase 2 Parameter Iteration]
+for expert in [detect_layer.experts1, detect_layer.experts2]:
+    for p in expert.parameters():
+        p.requires_grad = True
+\end{lstlisting}
+
+% ==============================================================================
+\chapter{Mathematical Formulation of the Late-Fusion Architecture}
+
+\section{Logistic Regression Node Mapping}
+The core system bridges the discrete mathematical outputs from the YOLO Mixture of Experts ($F$) and the EfficientNet Classifier ($P_4$). Both algorithms optimize inherently unconnected convex spaces. An elegant late-fusion logistic node translates these variables into a singular operational truth probability bounded exactly by $[0, 1]$.
+
+\begin{equation}
+    z = w_1 F + w_2 P_4 + b
+\end{equation}
+
+Per the parameters established in \texttt{CONFIG} within \texttt{pipeline.py}:
+\begin{itemize}
+    \item $w_1 = 0.3$: YOLO Maximum Confidence weight.
+    \item $w_2 = 0.7$: EfficientNet Class Probability weight.
+    \item $b = -0.5$: Native Bias offset determining baseline suppression.
+\end{itemize}
+
+Since $P_4$ dictates global context over local context ($F$), it retains heavily scaled multiplier prioritization ($0.7 \gg 0.3$).
+
+The linear continuous boundary map $z \in \mathbb{R}$ is squashed into the activation state $G$ utilizing the logistic sigmoid function $\sigma$:
+\begin{equation}
+    G(z) = \frac{1}{1 + \exp(-z)}
+\end{equation}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+        title={Sigmoid Transfer Function behavior over variable $z$},
+        xlabel={$z = w_1 F + w_2 P_4 + b$},
+        ylabel={$G = \sigma(z)$},
+        ymin=-0.1, ymax=1.1,
+        xmin=-6, xmax=6,
+        axis lines=center,
+        grid=major,
+        width=12cm,
+        height=8cm,
+        samples=100
+    ]
+    \addplot[color=red, thick, domain=-6:6] {1/(1+exp(-x))};
+    \draw[dashed, blue, thick] (axis cs: -6, 0.4) -- (axis cs: 6, 0.4) node[above left, black] {Threshold $T_1$};
+    \end{axis}
+    \end{tikzpicture}
+    \caption{Logistic Fusion space mapping the linear combination against classification bounds}
+\end{figure}
+
+\section{Discrete Threshold Routing Logistics}
+
+The system defines decision clusters $\mathcal{C} = \text{\{NOdrone, DroneType, Detected\}}$ mapped dynamically against non-linear conditions evaluated against thresholds $T_1=0.4$ and $T_2=0.05$.
+
+The logical routing matrix $\mathcal{M}(G, F)$ operates strictly as a multi-step Boolean formulation:
+\begin{align}
+    \text{If } G &\leq 0.4 \implies \mathcal{C} = \text{NOdrone} \\
+    \text{Else If } F &> 0.05 \implies \mathcal{C} = \text{DroneType} \oplus \text{string}(y_{class\_name}) \\
+    \text{Else } &\implies \mathcal{C} = \text{Detected}
+\end{align}
+
+This logic hierarchy asserts that if $G \leq 0.4$, the baseline fusion asserts definitively null logic mapping. If the environment overrides the threshold ($G > 0.4$), the algorithm queries YOLO's local object proposal confidence $F$. Should $F$ hold structural merit exceeding baseline artifacts ($0.05$), exact drone species classification is yielded. Otherwise, general drone detection is affirmed absent of spatial geometry precision.
+
+% ==============================================================================
+\chapter{System VRAM Execution Footprints and Tensor Processing}
+
+\section{GPU Optimization Parameters}
+Both the EfficientNet classifier node and the YOLO MoE node maintain residency within identical \texttt{device='cuda'} architectures. Total VRAM allocation relies on standard 32-bit floating point (\texttt{fp32}) alignments within PyTorch tensor engines.
+
+For an aggregated execution, the forward pass computational cost comprises:
+\begin{equation}
+    FLOPs_{total} = FLOPs_{\text{EfficientNet}} + FLOPs_{\text{YOLO-MoE}}
+\end{equation}
+
+By invoking \texttt{verbose=False} parameter bounds within the `ultralytics` prediction script, output stream processing is diminished severely. Additionally, the \texttt{imgsz=640} constraint downscales the input arrays $I^{H,W \to 640,640}$ via Affine linear transformations inside the YOLO preprocessing pipeline matrix, preventing tensor blowout inside the MoE nodes which scale quadratically roughly following $\mathcal{O}(H \cdot W \cdot C_{internal})$ logic paradigms.
+
+% ==============================================================================
+\chapter{Micro-Architecture of the EfficientNet-B0 Feature Extractor}
+
+\section{Depthwise Separable Convolutions and MBConv Blocks}
+The EfficientNet architecture relies predominantly on Mobile Inverted Bottleneck Convolution (MBConv) blocks. To understand the computational efficiency, we decouple the standard convolution into two distinct linear operations: a depthwise convolution filtering spatial representations, and a pointwise convolution projecting channel dimensions.
+
+Let the input tensor be $\mathcal{X} \in \mathbb{R}^{H \times W \times C_{in}}$, and a standard convolutional kernel be $\mathcal{K} \in \mathbb{R}^{K \times K \times C_{in} \times C_{out}}$. The computational cost $\mathcal{C}_{std}$ is:
+\begin{equation}
+    \mathcal{C}_{std} = H \cdot W \cdot C_{in} \cdot C_{out} \cdot K^2
+\end{equation}
+
+The MBConv splits this. The depthwise kernel $\mathcal{K}_{dw} \in \mathbb{R}^{K \times K \times C_{in}}$ processes each channel independently:
+\begin{equation}
+    y_{i,j,c} = \sum_{m=1}^{K}\sum_{n=1}^{K} \mathcal{K}_{dw,m,n,c} \cdot x_{i+m-1, j+n-1, c}
+\end{equation}
+Followed by the pointwise kernel $\mathcal{K}_{pw} \in \mathbb{R}^{1 \times 1 \times C_{in} \times C_{out}}$. The combined cost $\mathcal{C}_{sep}$ scales as:
+\begin{equation}
+    \mathcal{C}_{sep} = H \cdot W \cdot C_{in} \cdot K^2 + H \cdot W \cdot C_{in} \cdot C_{out}
+\end{equation}
+
+The computational reduction factor is thus analytically defined as:
+\begin{equation}
+    \frac{\mathcal{C}_{sep}}{\mathcal{C}_{std}} = \frac{1}{C_{out}} + \frac{1}{K^2}
+\end{equation}
+For a typical $3 \times 3$ kernel, this equates to roughly an 8x to 9x reduction in FLOPs, permitting the parallel instantiation of EfficientNet alongside YOLO within constrained VRAM bounds.
+
+\section{Squeeze-and-Excitation (SE) Optimization}
+To augment spatial awareness, EfficientNet utilizes SE optimization mapping spatial channel dependencies. For an intermediate feature map $U \in \mathbb{R}^{H \times W \times C}$, the squeeze operation applies Global Average Pooling (GAP) to generate a channel descriptor $z \in \mathbb{R}^C$:
+\begin{equation}
+    z_c = F_{sq}(u_c) = \frac{1}{H \times W} \sum_{i=1}^{H}\sum_{j=1}^{W} u_c(i,j)
+\end{equation}
+
+The excitation mechanism then applies a multi-layer perceptron learning channel-specific weights $s \in \mathbb{R}^C$:
+\begin{equation}
+    s = F_{ex}(z, \mathcal{W}) = \sigma(\mathcal{W}_2 \delta(\mathcal{W}_1 z))
+\end{equation}
+Where $\delta$ is the Swish activation function, $\mathcal{W}_1 \in \mathbb{R}^{\frac{C}{r} \times C}$, $\mathcal{W}_2 \in \mathbb{R}^{C \times \frac{C}{r}}$, and $r$ is the reduction ratio. The final feature tensor maps as $\tilde{X} = F_{scale}(U, s) = s_c u_c$.
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[
+        box/.style={draw, fill=white, minimum width=2.5cm, minimum height=1cm, align=center, thick},
+        arrow/.style={-Latex, thick},
+        scale=0.9, transform shape
+    ]
+        \node[box, fill=blue!10] (input) {$X \in \mathbb{R}^{H \times W \times C_{in}}$};
+        \node[box, fill=gray!20, right=1.5cm of input] (expansion) {1x1 Conv\\Expansion};
+        \node[box, fill=gray!20, right=1.5cm of expansion] (dwconv) {KxK Dwise\\Conv};
+        \node[box, fill=orange!10, below=1.5cm of dwconv] (se) {Squeeze-and-Excitation};
+        \node[box, fill=gray!20, left=1.5cm of se] (projection) {1x1 Conv\\Projection};
+        \node[box, fill=green!10, left=1.5cm of projection] (output) {Residual Add};
+        
+        \draw[arrow] (input) -- (expansion);
+        \draw[arrow] (expansion) -- (dwconv);
+        \draw[arrow] (dwconv) -- (se);
+        \draw[arrow] (se) -- (projection);
+        \draw[arrow] (projection) -- (output);
+        \draw[arrow] (input) |- (output);
+    \end{tikzpicture}
+    \caption{MBConv Structure with Squeeze-and-Excitation Module}
+\end{figure}
+
+\chapter{YOLO11 Functional Decomposition and Advanced Bounding}
+
+\section{Path Aggregation Network (PANet) and C2f Topology}
+The YOLO architecture propagates features through a specialized Spatial Pyramid Pooling - Fast (SPPF) module and a Path Aggregation Network (PANet). The cross-scale connections facilitate the merging of high-resolution local features with low-resolution semantic constructs.
+
+Let the feature layers extracted from the backbone be $\mathcal{P}_3, \mathcal{P}_4, \mathcal{P}_5$ with respective downsampling strides of 8, 16, and 32. 
+The PANet topology relies on bidirectional mapping. First, a top-down tensor fusion via nearest-neighbor upsampling $\mathcal{U}$:
+\begin{align}
+    \mathcal{F}_5 &= Conv(\mathcal{P}_5) \\
+    \mathcal{F}_4 &= Conv(\mathcal{P}_4) \oplus \mathcal{U}(\mathcal{F}_5) \\
+    \mathcal{F}_3 &= Conv(\mathcal{P}_3) \oplus \mathcal{U}(\mathcal{F}_4)
+\end{align}
+
+Subsequently, a bottom-up augmentation utilizing stride-2 convolutions $S_2$:
+\begin{align}
+    \mathcal{N}_3 &= \mathcal{F}_3 \\
+    \mathcal{N}_4 &= \mathcal{F}_4 \oplus S_2(\mathcal{N}_3) \\
+    \mathcal{N}_5 &= \mathcal{F}_5 \oplus S_2(\mathcal{N}_4)
+\end{align}
+
+\section{Distribution Focal Loss (DFL) and CIoU Mechanisms}
+During Phase 2 fine-tuning, the bounding box coordinate regression utilizes Complete Intersection over Union (CIoU) to inherently minimize overlap variance while penalizing aspect ratio drift and center-point deviation.
+\begin{equation}
+    \mathcal{L}_{CIoU} = 1 - IoU + \frac{\rho^2(\mathbf{b}, \mathbf{b}^{gt})}{c^2} + \alpha v
+\end{equation}
+Where $\rho$ calculates the Euclidean distance between the predicted box center $\mathbf{b}$ and ground truth center $\mathbf{b}^{gt}$, $c$ is the diagonal length of the smallest enclosing bounding geometry, $\alpha$ is a trade-off parameter, and $v$ measures the consistency of the aspect ratio:
+\begin{equation}
+    v = \frac{4}{\pi^2} \left( \arctan\frac{w^{gt}}{h^{gt}} - \arctan\frac{w}{h} \right)^2
+\end{equation}
+
+DFL extends this by shifting bounding box regression from standard Dirac delta distribution prediction to continuous probability distributions over coordinates $y \in [y_0, y_n]$ integration:
+\begin{equation}
+    \hat{y} = \sum_{i=0}^{n} P(y_i) y_i
+\end{equation}
+This mathematically softens boundaries affecting drones transitioning through motion blur.
+
+\chapter{Auxiliary MoE Dynamics: Load Balancing and Entropy}
+
+\section{Preventing Expert Collapse via Entropy Loss}
+When optimizing Mixture of Experts frameworks, deep networks display a systemic bias to route all tokens to an infinitesimally small subset of experts, causing "Expert Collapse." Specifically, Expert 2 (Moving Expert) might consistently overpower Expert 1 (Stationary Expert) if temporal motion is persistent.
+
+To enforce routing parity during the Phase 2 gradient unlock, the network natively injects a normalized load balancing load $\mathcal{L}_{balance}$. For a batch of $N$ tokens optimized over $E=2$ experts, let $f_i$ represent the empirical percentage of tokens routed to Expert $i$:
+\begin{equation}
+    f_i = \frac{1}{N} \sum_{x \in \mathcal{B}} \mathbf{1}\left( \arg\max_j g_j(x) = i \right)
+\end{equation}
+
+Additionally, let $P_i$ denote the mean routing probability vector per expert over the total batch subset:
+\begin{equation}
+    P_i = \frac{1}{N} \sum_{x \in \mathcal{B}} g_i(x)
+\end{equation}
+
+The auxiliary loss scaling factor enforcing uniform distribution $\mathcal{L}_{balance}$ is defined as the scaled dot product mapping:
+\begin{equation}
+    \mathcal{L}_{balance} = \alpha_{balance} \cdot E \cdot \sum_{i=1}^{E} f_i \cdot P_i
+\end{equation}
+
+Minimizing this quadratic mapping enforces orthogonal uniformity preventing the gradient $L_2$ norm from degenerating to 0 on unfavored experts. 
+
+\chapter{Temporal State Drifts \& Synchronization in Pipelines (\texttt{app.py})}
+
+\section{Asynchronous Buffer Drifts}
+The dual Camera 1 and Camera 2 matrices populate \texttt{runs/folder\_a} and \texttt{runs/folder\_b} under varying network latencies ($\tau_{net\_A} \neq \tau_{net\_B}$). Consequently, the inode creation timestamps natively tracked sequentially by the \texttt{process\_latest\_stream\_pair} function undergo phase drifting:
+\begin{equation}
+    \Delta \tau(t) = | \mathcal{T}_{ctime}^{(A)}(t) - \mathcal{T}_{ctime}^{(B)}(t) |
+\end{equation}
+
+If $\Delta \tau > \epsilon_{frame}$, fusion matrices are comparing spatial grids that refer to independent physical realities (e.g., Drone at time $t$ versus Drone at time $t - \Delta \tau$). The condition enforced in software mathematically aligns inference if and only if both buffers possess monotonic upward time-series generation characteristics:
+\begin{equation}
+    (\mathcal{T}_{new}^{(A)} > \mathcal{T}_{last}^{(A)}) \land (\mathcal{T}_{new}^{(B)} > \mathcal{T}_{last}^{(B)})
+\end{equation}
+This logic functions as a poor man's Phase-Locked Loop (PLL) operating independently over the Python runtime's filesystem interface hooks.
+
+% ==============================================================================
+\chapter{Dataset Mapping and Tensor Pipeline Preprocessing}
+
+\section{Typological Dataset Segmentation}
+The foundational training relies on a bifurcated dataset methodology to cater to the Mixture of Experts logical routing. The datasets are defined under YAML structures (e.g., \texttt{test\_data.yaml}, \texttt{moving\_data.yaml}, \texttt{stationary\_data.yaml}). Let the global dataset space be $\mathcal{D}$. The mapping defines $\mathcal{D} = \mathcal{D}_{stat} \cup \mathcal{D}_{mov}$.
+
+For the YOLO Mixture of Experts architecture, $\mathcal{D}$ requires structural bounding box annotations $B \in \mathbb{R}^{N \times 4}$ formatted as normalized coordinate geometries $(x_c, y_c, w, h)$. Conversely, the EfficientNet classifier node trains on a strictly mapped subset $\mathcal{D}_{cls}$ wherein annotations are dense one-hot encoded vectors $y \in \{0, 1\}^2$ designating \texttt{NOdrone} and \texttt{DroneType}. 
+
+\section{Morphological Characteristics of the Dataset}
+Visually and structurally, the dataset captures Unmanned Aerial Vehicles (UAVs) under highly variable photometric and topological conditions. The data matrices encompass variable altitudes, focal lengths, and meteorological impairments. 
+
+The macroscopic visual parameters are mathematically decoupled into three phenomenological vectors:
+\begin{itemize}
+    \item \textbf{Stationary Topography ($\mathcal{D}_{stat}$)}: Tensors characterized by high edge-gradient fidelity. The spatial derivatives $\nabla I_{stat}$ exhibit sharp Laplacian zero-crossings indicating distinct rotor and chassis features traversing against static backgrounds (e.g., clear skies or building facades).
+    \item \textbf{Kinetic Morphology ($\mathcal{D}_{mov}$)}: Matrices dominated by temporal velocity artifacts (motion blur). The structural integrity of the UAV is compromised by point-spread function (PSF) integration over the exposure time $\tau_{exp}$, yielding anisotropic smearing. This dictates low contour confidence and demands regression over pixel probability densities.
+    \item \textbf{Negative Samples ($\mathcal{D}_{NOdrone}$)}: A rigorously curated null-space injected to suppress false positives. This subspace strictly maps objects natively occupying aerial bounding geometries (e.g., avians, commercial aircraft, kite anomalies, and sensor noise/lens flares) preventing the EfficientNet's Softmax node from collapsing into naive sky-classification paradigms.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Dataset Modality and Tensor Target Distribution}
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Dataset Partition} & \textbf{Visual Archetype} & \textbf{Tensor Target} & \textbf{Optimization Objective} \\ \midrule
+$\mathcal{D}_{stat}$ & High Edge Fidelity, Hovering & BBox $(x, y, w, h)$ & $\min \mathcal{L}_{CIoU} + \mathcal{L}_{\text{Expert } 1}$ \\
+$\mathcal{D}_{mov}$ & High Motion Blur, Kinematic & BBox $(x, y, w, h)$ & $\min \mathcal{L}_{DFL} + \mathcal{L}_{\text{Expert } 2}$ \\
+$\mathcal{D}_{cls}(\text{Drone})$ & Macro UAV Chassis Features & $y \in [0, 1]$ & Binary Cross-Entropy  \\
+$\mathcal{D}_{cls}(\text{NOdrone})$ & Avians, Aircraft, Glare & $y \in [1, 0]$ & Binary Cross-Entropy \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\section{Stochastic Data Augmentation Geometry}
+To prevent adversarial overfitting, the Ultralytics preprocessing pipeline injects continuous affine and mosaic transformations within the dataloader boundaries.
+For an image tensor $I$, an affine transformation $\mathcal{A}$ modifies the coordinate space via a projection matrix $M$:
+\begin{equation}
+    \begin{bmatrix} x' \\ y' \\ 1 \end{bmatrix} = \begin{bmatrix} a_{11} & a_{12} & t_x \\ a_{21} & a_{22} & t_y \\ 0 & 0 & 1 \end{bmatrix} \begin{bmatrix} x \\ y \\ 1 \end{bmatrix}
+\end{equation}
+Mosaic augmentation constructs a newly synthesized training lattice by aggregating four distinct dataset images $I_1, I_2, I_3, I_4$ into a singular dimensional entity $\hat{I}^{2H \times 2W}$, forcing the spatial anchor geometries to shift out of localized contextual bias and introducing scale divergence naturally.
+
+% ==============================================================================
+\chapter{Technological Ecosystem and Compute Toolchain}
+
+\section{Core Software Frameworks}
+The pipeline is orchestrated across an interconnected suite of mathematical processing and data-routing architectures:
+\begin{itemize}
+    \item \textbf{PyTorch 2.x with Autograd}: Driven by the Torch C++ backend (\texttt{libtorch}), it executes dynamic computational graph construction (Define-by-Run) inherently required for the custom dual-phase Mixture of Experts gradient freezing/unfreezing mechanism detailed in \texttt{run\_train.py}.
+    \item \textbf{Ultralytics Framework}: Serves as the abstracted scaffolding over PyTorch, facilitating the distribution of the YOLO11 topology, CIoU loss calculations, and PANet structural deployments.
+    \item \textbf{OpenCV (cv2)}: Selected exclusively for its highly optimized C-contiguous array reconstruction parameters bound to hardware \texttt{imdecode} and \texttt{imwrite} routines to construct image tensors out of base64 bounds without standard Python Global Interpreter Lock (GIL) hindrance.
+    \item \textbf{Streamlit}: Executes the asynchronous, React-based frontend dashboard via Python abstraction, interfacing directly with the OS inode tables for algorithmic filesystem monitoring (\texttt{st\_autorefresh}).
+    \item \textbf{MQTT Protocol via EMQX}: The high-throughput networking layer routing the asynchronous TCP/IP stream packets seamlessly through \texttt{paho-mqtt} daemon threads to decouple image capture latency from the core ML pipeline.
+\end{itemize}
+
+\section{Hardware and Compute Primitives}
+The inference and topological matrix multiplications heavily rely on NVIDIA's Compute Unified Device Architecture (CUDA) alongside cuDNN heuristics. Through cuDNN's Winograd algorithms, standard convolutions are transformed into domain mappings requiring significantly fewer arithmetic FLOPs, thereby accelerating the late-fusion probability merging inside the \texttt{detect()} pipeline bound natively to \texttt{device='cuda'}. All model weights are serialized efficiently via \texttt{torch.save} into native \texttt{.pt} formats for low-latency memory loading.
+
+\end{document}
