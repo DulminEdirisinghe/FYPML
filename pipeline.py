@@ -45,7 +45,7 @@ logger = setup_logger()
 
 # ============== CONFIG ==============
 CONFIG = {
-    'classifier_model_path': 'runs/efficientnet_v9/20260430_051825/best_classifier.pth',
+    'classifier_model_path': 'runs/efficientnet_v10/20260430_141515/best_classifier.pth',
     'classifier_model_name': 'efficientnet_b0',
     'num_classes': 2,
     'class_names': ['no_drone', 'drone'],

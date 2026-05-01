@@ -11,9 +11,9 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 # ============== CONFIG ==============
 CONFIG = {
-    'train_dir': 'data/v9/SCD_images/train',
-    'test_dir': 'data/v9/SCD_images/test',
-    'output_root': 'runs/efficientnet_v9',
+    'train_dir': 'data/v10/SCD_images/train',
+    'test_dir': 'data/v10/SCD_images/test',
+    'output_root': 'runs/efficientnet_v10',
     'batch_size': 32,
     'num_epochs': 50,
     'patience': 5,
