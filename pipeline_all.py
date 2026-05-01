@@ -49,7 +49,7 @@ logger = setup_logger()
 # ============== CONFIG ==============
 CONFIG = {
     # EfficientNet binary model trained with no_drone vs drone
-    'classifier_model_path': 'runs/efficientnet_v9/20260430_051825/best_classifier.pth',
+    'classifier_model_path': 'runs/efficientnet_v10/20260430_141515/best_classifier.pth',
     'classifier_model_name': 'efficientnet_b0',
     'num_classes': 2,
     'class_names': ['no_drone', 'drone'],
@@ -64,7 +64,7 @@ CONFIG = {
 
     # YOLO 3-class model
     'yolo_model_yaml': 'ultralytics/cfg/models/11/yolo11.yaml',
-    'yolo_weights_path': 'weights/v5/phase1_cv3_model.pt',
+    'yolo_weights_path': 'weights/results_check/phase1_cv3_model.pt',
     'yolo_imgsz': 640,
     'yolo_device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'yolo_nc': 3,

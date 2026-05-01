@@ -11,9 +11,9 @@ from pipeline_all import load_yolo_model, run_yolo, load_model, get_transforms, 
 FOLDER_A = 'data/v5/SCD_images/test'
 FOLDER_B = 'data/v5/YOLO/stationary/test'
 CONF_THRESH = 0.70
-PLOT_SAVE_DIR = 'runs/benchmark_visuals'
+PLOT_SAVE_DIR = 'runs/result_check/benchmark_plots_fused' # Directory to save the benchmark plots
 K_EXAMPLES = 10  # Number of plots to save for each category
-YOLO_ONLY = False # Set to False to run full pipeline (EfficientNet + YOLO fusion)
+YOLO_ONLY = False# Set to False to run full pipeline (EfficientNet + YOLO fusion)
 
 # ============== PLOTTING UTILITY ==============
 def save_benchmark_plot(res, idx, save_dir):

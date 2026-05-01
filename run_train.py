@@ -130,10 +130,10 @@ from collections import defaultdict
 # Configuration
 model_path = 'ultralytics/cfg/models/11/yolo11.yaml'
 data_config = 'test_data.yaml'
-expert2_weights = 'weights/v5/stationary_expert_cv3_weights.pt'
-expert1_weights = 'weights/v5/moving_expert_cv3_weights.pt'
-phase1_save = 'weights/v5/phase1_cv3_model.pt'
-phase2_save = 'weights/v5/phase2_cv3_model.pt'
+expert2_weights = 'weights/results_check/stationary_expert_cv3_weights.pt'#'weights/v5/stationary_expert_cv3_weights.pt'
+expert1_weights = 'weights/results_check/moving_expert_cv3_weights.pt'#'weights/v5/moving_expert_cv3_weights.pt'
+phase1_save = 'weights/results_check/phase1_cv3_model.pt'
+phase2_save = 'weights/results_check/phase2_cv3_model.pt'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 imgsz = 640

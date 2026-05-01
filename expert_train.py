@@ -6,8 +6,8 @@ import copy
 model_path = 'ultralytics/cfg/models/11/yolo11.yaml'
 data_config_moving = 'moving_data.yaml'
 data_config_stationary = 'stationary_data.yaml'
-save_expert1 = 'weights/v5/moving_expert_cv3_weights.pt'
-save_expert2 = 'weights/v5/stationary_expert_cv3_weights.pt'
+save_expert1 = 'weights/results_check/moving_expert_cv3_weights.pt'
+save_expert2 = 'weights/results_check/stationary_expert_cv3_weights.pt'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 def save_experts(model, expert):
@@ -28,18 +28,18 @@ def train_yolo():
     model = YOLO(model_path)
     
     # Train the model
-    results_moving = model.train(
-        data=data_config_moving,
-        epochs=100,
-        imgsz=640,
-        device=device,
-        batch=16,
-        save=True,
-        pretrained=True,  # Use pretrained weights if available
-    )
+    # results_moving = model.train(
+    #     data=data_config_moving,
+    #     epochs=100,
+    #     imgsz=640,
+    #     device=device,
+    #     batch=16,
+    #     save=True,
+    #     pretrained=True,  # Use pretrained weights if available
+    # )
     
-    # Save cv3 weights as experts
-    save_experts(model, 'moving')
+    # # Save cv3 weights as experts
+    # save_experts(model, 'moving')
     results_stationary = model.train(
         data=data_config_stationary,
         epochs=100,
@@ -51,7 +51,7 @@ def train_yolo():
     )
     save_experts(model, 'stationary')
 
-    return results_moving, results_stationary   
+    return results_stationary #results_moving#   
 
 if __name__ == "__main__":
     train_yolo()
